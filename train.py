@@ -1,5 +1,8 @@
+import os
 import yaml
 import numpy as np
+import torch
+import matplotlib.pyplot as plt
 from env import AsteroidDefenseEnv
 from models import Actor, Critic
 from sac import SAC
@@ -20,6 +23,10 @@ def train_agent():
     agent = SAC(actor, critic1, critic2, cfg["agent"])
 
     total_steps = 0
+    rewards = []
+    hulls = []
+    kills = []
+
     for ep in range(cfg["train"]["episodes"]):
         s, _ = env.reset()
         total_reward = 0
@@ -44,6 +51,53 @@ def train_agent():
             if d:
                 break
 
-        print(f"ep {ep} reward {total_reward:.2f}")
+        rewards.append(total_reward)
+        hulls.append(env.hull_damage)
+        kills.append(env.kills)
+
+        print(f"ep {ep} reward {total_reward:.2f} hull_damage {env.hull_damage} kills {env.kills}")
+
+        _save_training_plots(rewards, hulls, kills, out_dir="plots")
 
     return agent
+
+
+def save_agent(agent, out_dir="weights"):
+    os.makedirs(out_dir, exist_ok=True)
+    torch.save(agent.actor.state_dict(), os.path.join(out_dir, "actor.pt"))
+    torch.save(agent.critic1.state_dict(), os.path.join(out_dir, "critic1.pt"))
+    torch.save(agent.critic2.state_dict(), os.path.join(out_dir, "critic2.pt"))
+
+
+def _save_training_plots(rewards, hulls, kills, out_dir="plots"):
+    os.makedirs(out_dir, exist_ok=True)
+    x = np.arange(1, len(rewards) + 1)
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(x, rewards, label="reward")
+    plt.xlabel("episode")
+    plt.ylabel("reward")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "reward.png"))
+    plt.close()
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(x, hulls, label="hull_damage")
+    plt.xlabel("episode")
+    plt.ylabel("hull_damage")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "hull_damage.png"))
+    plt.close()
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(x, kills, label="kills")
+    plt.xlabel("episode")
+    plt.ylabel("kills")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "kills.png"))
+    plt.close()
+
+
+if __name__ == "__main__":
+    agent = train_agent()
+    save_agent(agent)
