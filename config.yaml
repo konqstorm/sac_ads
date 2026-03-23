@@ -1,0 +1,18 @@
+env:
+  width: 64
+  height: 64
+  max_steps: 200
+  delay: 3
+  dt: 0.1
+
+agent:
+  gamma: 0.99
+  tau: 0.005
+  alpha: 0.2
+  lr: 3.e-4
+  batch_size: 64
+  buffer_size: 50000
+  start_steps: 1000
+
+train:
+  episodes: 100
