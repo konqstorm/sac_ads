@@ -46,6 +46,12 @@ class SAC:
         action = torch.tanh(dist.rsample())
         return action.detach().numpy()[0]
 
+    def act_deterministic(self, state):
+        state = torch.tensor(state.flatten(), dtype=torch.float32).unsqueeze(0)
+        mean, _ = self.actor(state)
+        action = torch.tanh(mean)
+        return action.detach().numpy()[0]
+
     def update(self):
         if len(self.buffer.buf) < self.batch_size:
             return

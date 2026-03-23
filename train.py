@@ -3,6 +3,7 @@ import yaml
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import random
 from env import AsteroidDefenseEnv
 from models import Actor, Critic
 from sac import SAC
@@ -12,6 +13,14 @@ def train_agent():
         cfg = yaml.safe_load(f)
 
     env = AsteroidDefenseEnv(cfg["env"])
+    eval_env = AsteroidDefenseEnv(cfg["env"])
+
+    seed = cfg.get("train", {}).get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    env.reset(seed=seed)
+    eval_env.reset(seed=seed + 1)
 
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
@@ -26,6 +35,9 @@ def train_agent():
     rewards = []
     hulls = []
     kills = []
+    eval_rewards = []
+    eval_hulls = []
+    eval_kills = []
 
     for ep in range(cfg["train"]["episodes"]):
         s, _ = env.reset()
@@ -55,9 +67,10 @@ def train_agent():
         hulls.append(env.hull_damage)
         kills.append(env.kills)
 
-        print(f"ep {ep} reward {total_reward:.2f} hull_damage {env.hull_damage} kills {env.kills}")
+        msg = f"ep {ep} reward {total_reward:.2f} hull_damage {env.hull_damage} kills {env.kills}"
+        print(msg)
 
-        _save_training_plots(rewards, hulls, kills, out_dir="plots")
+        _save_training_plots(rewards, hulls, kills, eval_rewards, eval_hulls, eval_kills, out_dir="plots")
 
     return agent
 
@@ -69,30 +82,39 @@ def save_agent(agent, out_dir="weights"):
     torch.save(agent.critic2.state_dict(), os.path.join(out_dir, "critic2.pt"))
 
 
-def _save_training_plots(rewards, hulls, kills, out_dir="plots"):
+def _save_training_plots(rewards, hulls, kills, eval_rewards, eval_hulls, eval_kills, out_dir="plots"):
     os.makedirs(out_dir, exist_ok=True)
     x = np.arange(1, len(rewards) + 1)
 
     plt.figure(figsize=(8, 4))
     plt.plot(x, rewards, label="reward")
+    if eval_rewards:
+        plt.plot(np.arange(1, len(eval_rewards) + 1), eval_rewards, label="eval_reward")
     plt.xlabel("episode")
     plt.ylabel("reward")
+    plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "reward.png"))
     plt.close()
 
     plt.figure(figsize=(8, 4))
     plt.plot(x, hulls, label="hull_damage")
+    if eval_hulls:
+        plt.plot(np.arange(1, len(eval_hulls) + 1), eval_hulls, label="eval_hull_damage")
     plt.xlabel("episode")
     plt.ylabel("hull_damage")
+    plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "hull_damage.png"))
     plt.close()
 
     plt.figure(figsize=(8, 4))
     plt.plot(x, kills, label="kills")
+    if eval_kills:
+        plt.plot(np.arange(1, len(eval_kills) + 1), eval_kills, label="eval_kills")
     plt.xlabel("episode")
     plt.ylabel("kills")
+    plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "kills.png"))
     plt.close()
