@@ -1,6 +1,6 @@
 import yaml
 import numpy as np
-from env import CameraEnv
+from env import AsteroidDefenseEnv
 from models import Actor, Critic
 from sac import SAC
 
@@ -8,7 +8,7 @@ def train_agent():
     with open("config.yaml") as f:
         cfg = yaml.safe_load(f)
 
-    env = CameraEnv(cfg["env"])
+    env = AsteroidDefenseEnv(cfg["env"])
 
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]

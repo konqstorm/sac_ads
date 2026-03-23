@@ -1,9 +1,26 @@
 env:
-  width: 64
-  height: 64
-  max_steps: 200
-  delay: 3
-  dt: 0.1
+  max_steps: 1000
+  dt: 0.033
+  fov: 1.57 # 90 градусов
+  max_ang_vel: 2.0
+  fire_threshold: 0.0
+  projectile_speed: 150.0  # Скорость пули должна быть высокой
+  projectile_max_dist: 150.0
+  asteroid_radius: 5.0
+  impact_radius: 10.0
+  max_asteroids: 5
+  spawn_prob: 0.05
+  world_width: 120.0
+  world_height: 100.0
+  spawn_y: 100.0
+  spawn_z_min: 20.0
+  spawn_z_max: 80.0
+  asteroid_speed_y_min: 15.0
+  asteroid_speed_y_max: 30.0
+  asteroid_speed_xz_max: 10.0
+  reward_hit: 1.0
+  reward_impact: -1.0
+  reward_shot: -0.1
 
 agent:
   gamma: 0.99
