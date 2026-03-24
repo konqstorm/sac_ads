@@ -1,6 +1,6 @@
 env:
   # --- физика ---
-  max_steps: 2000
+  max_steps: 10000
   dt: 0.033
   fov: 1.57                   # 90 градусов
   fire_threshold: 0.0
@@ -9,7 +9,7 @@ env:
 
   # --- длительность игры ---
   total_asteroids: 20
-  max_hp: 10
+  max_hp: 5
 
   # --- астероиды ---
   asteroid_radius: 4.0
@@ -30,75 +30,33 @@ env:
   aim_quality_denom: 0.1
 
   # Начальные значения — будут перезаписаны curriculum-ом на старте
-  max_ang_vel: 1.0
-  max_asteroids: 1
+  max_ang_vel: 0.1
+  max_asteroids: 5
   spawn_prob: 0.03
-  spawn_x_range: 2.0
+  spawn_x_range: 10.0
   spawn_z_center: 50.0
-  spawn_z_range: 2.0
+  spawn_z_range: 10.0
   asteroid_speed_y_min: 8.0
   asteroid_speed_y_max: 16.0
-  asteroid_speed_xz_max: 1.0
+  asteroid_speed_xz_max: 6.0
 
 agent:
   gamma: 0.99
   tau: 0.005
   alpha: 0.1
   lr_actor: 1.e-4
-  lr_critic: 3.e-4
+  lr_critic: 2.e-4
   batch_size: 128             # 256 → 128: быстрее, качество не страдает
   buffer_size: 300000
   start_steps: 5000           # 20000 → 5000: меньше случайного прогрева
   update_every: 4             # обновлять сети раз в 4 шага (не каждый шаг)
   updates_per_step: 4         # зато сразу 4 апдейта подряд (gradient steps)
   policy_delay: 2             # актор обновляется раз в 2 апдейта критика
+  target_sample_every: 5      # пересэмплировать цель раз в N шагов или после выстрела
 
 train:
-  episodes: 400
-  n_envs: 4                   # параллельных сред (по числу ядер CPU / 2)
+  episodes: 50
+  n_envs: 1                   # параллельных сред (по числу ядер CPU / 2)
   seed: 42
   plot_every: 10              # сохранять графики раз в 10 эпизодов
   critic_eval_every: 10       # оценка качества критика раз в N эпизодов
-
-# ---------------------------------------------------------------------------
-# Curriculum: каждая стадия активна до указанного эпизода включительно.
-# Параметры стадии перезаписывают соответствующие поля env в среде напрямую.
-# ---------------------------------------------------------------------------
-curriculum:
-  - until_ep: 50
-    # Стадия 1: научиться попадать
-    # Один астероид, летит почти прямо, быстрая пушка
-    max_ang_vel: 1.0
-    max_asteroids: 1
-    spawn_prob: 0.02
-    spawn_x_range: 2.0
-    spawn_z_range: 2.0
-    asteroid_speed_xz_max: 1.0
-
-  - until_ep: 150
-    # Стадия 2: разброс позиций и скоростей
-    # 1-2 астероида, боковая скорость растёт, пушка медленнее
-    max_ang_vel: 0.5
-    max_asteroids: 2
-    spawn_prob: 0.03
-    spawn_x_range: 6.0
-    spawn_z_range: 6.0
-    asteroid_speed_xz_max: 4.0
-
-  - until_ep: 250
-    # Стадия 3: несколько целей, начало приоритизации
-    max_ang_vel: 0.2
-    max_asteroids: 3
-    spawn_prob: 0.04
-    spawn_x_range: 10.0
-    spawn_z_range: 10.0
-    asteroid_speed_xz_max: 6.0
-
-  - until_ep: 400
-    # Стадия 4: финальные условия — целевая скорость 0.1
-    max_ang_vel: 0.1
-    max_asteroids: 5
-    spawn_prob: 0.05
-    spawn_x_range: 12.0
-    spawn_z_range: 12.0
-    asteroid_speed_xz_max: 7.0

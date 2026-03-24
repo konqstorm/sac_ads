@@ -13,26 +13,83 @@ from core.sac import SAC
 
 
 # ---------------------------------------------------------------------------
-# Curriculum
+# Policy helpers (probabilities -> baseline control)
 # ---------------------------------------------------------------------------
 
-def get_current_stage(episode: int, stages: list[dict]) -> dict:
-    """Возвращает первую стадию, чей until_ep > episode."""
-    for stage in stages:
-        if episode < stage["until_ep"]:
-            return stage
-    return stages[-1]
+def _softmax(x):
+    x = np.array(x, dtype=np.float32)
+    x = x - np.max(x)
+    e = np.exp(x)
+    s = np.sum(e)
+    if s <= 1e-8:
+        return np.ones_like(x) / len(x)
+    return e / s
 
 
-def apply_curriculum(vec_env: VecEnv, stage: dict):
-    vec_env.apply_stage(stage)
+def _ordered_asteroids(env):
+    if not env.asteroids:
+        return []
+    times = []
+    for a in env.asteroids:
+        t = env._solve_intercept(a["pos"], a["vel"], env.projectile_speed)
+        times.append(t if t is not None else 1e6)
+    order = np.argsort(times)
+    return [env.asteroids[i] for i in order]
+
+
+def _baseline_action(env, target_idx, aim_eps=0.02):
+    ordered = _ordered_asteroids(env)
+    if not ordered:
+        return np.array([0.0, 0.0, -1.0], dtype=np.float32), False
+
+    if target_idx is None:
+        target_idx = 0
+    target_idx = int(np.clip(target_idx, 0, len(ordered) - 1))
+    target = ordered[target_idx]
+
+    r = target["pos"].astype(np.float32)
+    v = target["vel"].astype(np.float32)
+    t = env._solve_intercept(r, v, env.projectile_speed)
+    aim_point = r + v * t if t is not None else r
+
+    target_yaw, target_pitch = env._direction_to_yaw_pitch(aim_point)
+
+    half_fov = env.fov / 2.0
+    target_yaw = np.clip(target_yaw, -half_fov, half_fov)
+    target_pitch = np.clip(target_pitch, -half_fov, half_fov)
+
+    err_yaw = target_yaw - env.yaw
+    err_pitch = target_pitch - env.pitch
+
+    step = env.max_ang_vel * env.dt
+    yaw_action = np.clip(err_yaw / step, -1.0, 1.0)
+    pitch_action = np.clip(err_pitch / step, -1.0, 1.0)
+
+    fire_action = -1.0
+    fired = False
+    if abs(err_yaw) < aim_eps and abs(err_pitch) < aim_eps:
+        fire_action = 1.0
+        fired = True
+
+    return np.array([yaw_action, pitch_action, fire_action], dtype=np.float32), fired
+
+
+def _sample_target_index(probs, n_available):
+    if n_available <= 0:
+        return None
+    probs = np.array(probs[:n_available], dtype=np.float32)
+    if probs.sum() <= 1e-6:
+        probs = np.ones(n_available, dtype=np.float32) / n_available
+    else:
+        probs = probs / probs.sum()
+    return int(np.random.choice(np.arange(n_available), p=probs))
 
 
 # ---------------------------------------------------------------------------
 # Plots
 # ---------------------------------------------------------------------------
 
-def _save_training_plots(rewards, hulls, kills, out_dir="plots"):
+def _save_training_plots(rewards, hulls, kills, out_dir="results/plots"):
     os.makedirs(out_dir, exist_ok=True)
     x = np.arange(1, len(rewards) + 1)
 
@@ -60,7 +117,7 @@ def _save_training_plots(rewards, hulls, kills, out_dir="plots"):
 # Save / Load
 # ---------------------------------------------------------------------------
 
-def save_agent(agent: SAC, out_dir="weights"):
+def save_agent(agent: SAC, out_dir="results/weights"):
     os.makedirs(out_dir, exist_ok=True)
     torch.save(agent.actor.state_dict(),   os.path.join(out_dir, "actor.pt"))
     torch.save(agent.critic1.state_dict(), os.path.join(out_dir, "critic1.pt"))
@@ -72,7 +129,7 @@ def save_agent(agent: SAC, out_dir="weights"):
 # Critic evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate_critic(agent, env, n_episodes=5, gamma=0.99):
+def evaluate_critic(agent, env, n_episodes=5, gamma=0.99, sample_every=5):
     """
     Собирает эпизоды, считает MC-returns и сравнивает
     с предсказаниями критика. Возвращает explained variance.
@@ -84,11 +141,25 @@ def evaluate_critic(agent, env, n_episodes=5, gamma=0.99):
         episode = []  # (state, action, reward)
 
         done = False
+        steps_since_sample = 0
+        current_target = None
         while not done:
-            a = agent.act_deterministic(s)
-            s2, r, done, _, _ = env.step(a)
-            episode.append((s, a, r))
+            raw_action = agent.act_deterministic(s)
+            probs = _softmax(raw_action)
+
+            if steps_since_sample == 0 or steps_since_sample >= sample_every:
+                ordered = _ordered_asteroids(env)
+                current_target = _sample_target_index(probs, len(ordered))
+                steps_since_sample = 0
+
+            base_action, fired = _baseline_action(env, current_target)
+            s2, r, done, _, _ = env.step(base_action)
+            episode.append((s, raw_action, r))
             s = s2
+
+            if fired:
+                steps_since_sample = sample_every  # force resample next step
+            steps_since_sample += 1
 
         # MC return с конца эпизода
         G = 0.0
@@ -133,7 +204,6 @@ def train_agent():
     env_cfg   = cfg["env"]
     agent_cfg = cfg["agent"]
     train_cfg = cfg["train"]
-    curriculum_stages = cfg.get("curriculum", [])
 
     # --- seeds ---
     seed = train_cfg.get("seed", 42)
@@ -146,10 +216,6 @@ def train_agent():
     seeds  = [seed + i * 100 for i in range(n_envs)]
     vec_env = VecEnv(env_cfg, n_envs=n_envs, seeds=seeds)
 
-    # Применяем первую стадию curriculum сразу
-    if curriculum_stages:
-        apply_curriculum(vec_env, get_current_stage(0, curriculum_stages))
-
     obs_list = vec_env.reset()
 
     # --- eval env (одиночная, для чистой оценки) ---
@@ -157,7 +223,7 @@ def train_agent():
 
     # --- agent ---
     obs_dim = vec_env.observation_space.shape[0]
-    act_dim = vec_env.action_space.shape[0]
+    act_dim = 5
 
     actor   = Actor(obs_dim, act_dim)
     critic1 = Critic(obs_dim, act_dim)
@@ -170,12 +236,12 @@ def train_agent():
     plot_every    = train_cfg.get("plot_every",          10)
     critic_eval_every = train_cfg.get("critic_eval_every", 0)
     total_eps     = train_cfg.get("episodes",           400)
+    sample_every  = agent_cfg.get("target_sample_every", 5)
 
     # Метрики собираем по эпизодам через eval_env (одиночный, честный)
     rewards_log, hulls_log, kills_log = [], [], []
 
     total_steps   = 0           # глобальный счётчик шагов по всем envs
-    prev_stage_id = None
     t_start = time.perf_counter()
 
     print(f"Starting training: {total_eps} episodes, {n_envs} envs, "
@@ -185,39 +251,44 @@ def train_agent():
 
     for ep in range(total_eps):
 
-        # --- curriculum: обновляем среды при смене стадии ---
-        if curriculum_stages:
-            stage = get_current_stage(ep, curriculum_stages)
-            stage_id = stage["until_ep"]
-            if stage_id != prev_stage_id:
-                apply_curriculum(vec_env, stage)
-                # eval_env тоже обновляем
-                for key, val in stage.items():
-                    if key != "until_ep" and hasattr(eval_env, key):
-                        setattr(eval_env, key, val)
-                prev_stage_id = stage_id
-                print(f"  [curriculum] ep={ep} → stage until_ep={stage_id} | "
-                      f"ang_vel={stage.get('max_ang_vel','?')} "
-                      f"asteroids={stage.get('max_asteroids','?')}")
-
         # --- сбор опыта через vec_env ---
-        # Каждый "episode" здесь = max_steps шагов в каждой из n_envs сред.
-        # Сброс среды при done происходит внутри vec_env.step() автоматически.
+        # Эпизод завершается, когда каждая env хотя бы один раз завершилась (done=True).
         steps_this_ep = vec_env.envs[0].max_steps
+        done_once = [False for _ in range(n_envs)]
+
+        # per-env target sampling state
+        steps_since_sample = [0 for _ in range(n_envs)]
+        current_target = [None for _ in range(n_envs)]
 
         for _ in range(steps_this_ep):
             # выбираем действия
             if total_steps < start_steps:
-                actions = [vec_env.action_space.sample() for _ in range(n_envs)]
+                raw_actions = [np.random.uniform(-1.0, 1.0, size=(5,)) for _ in range(n_envs)]
             else:
-                actions = [agent.act(s) for s in obs_list]
+                raw_actions = [agent.act(s) for s in obs_list]
+
+            # convert raw action -> probs -> baseline control
+            actions = []
+            for i in range(n_envs):
+                probs = _softmax(raw_actions[i])
+                if steps_since_sample[i] == 0 or steps_since_sample[i] >= sample_every:
+                    ordered = _ordered_asteroids(vec_env.envs[i])
+                    current_target[i] = _sample_target_index(probs, len(ordered))
+                    steps_since_sample[i] = 0
+
+                base_action, fired = _baseline_action(vec_env.envs[i], current_target[i])
+                actions.append(base_action)
+
+                if fired:
+                    steps_since_sample[i] = sample_every
+                steps_since_sample[i] += 1
 
             obs2_list, reward_list, done_list, _ = vec_env.step(actions)
 
             # кладём в буфер
             for i in range(n_envs):
                 agent.buffer.add(
-                    obs_list[i], actions[i],
+                    obs_list[i], raw_actions[i],
                     reward_list[i],
                     obs2_list[i],
                     float(done_list[i])
@@ -232,19 +303,38 @@ def train_agent():
                 for _ in range(updates_per_step):
                     agent.update()
 
+            # проверяем завершение эпизода по всем средам
+            for i in range(n_envs):
+                if done_list[i]:
+                    done_once[i] = True
+            if all(done_once):
+                break
+
         # --- eval: один честный эпизод без шума ---
         s, _ = eval_env.reset(seed=seed + ep)
         ep_reward, ep_done = 0.0, False
+        steps_since_sample_eval = 0
+        current_target_eval = None
         while not ep_done:
-            a = agent.act_deterministic(s)
-            s, r, ep_done, _, _ = eval_env.step(a)
+            raw_action = agent.act_deterministic(s)
+            probs = _softmax(raw_action)
+            if steps_since_sample_eval == 0 or steps_since_sample_eval >= sample_every:
+                ordered = _ordered_asteroids(eval_env)
+                current_target_eval = _sample_target_index(probs, len(ordered))
+                steps_since_sample_eval = 0
+
+            base_action, fired = _baseline_action(eval_env, current_target_eval)
+            s, r, ep_done, _, _ = eval_env.step(base_action)
             ep_reward += r
+
+            if fired:
+                steps_since_sample_eval = sample_every
+            steps_since_sample_eval += 1
 
         rewards_log.append(ep_reward)
         hulls_log.append(eval_env.hull_damage)
         kills_log.append(eval_env.kills)
 
-        ang_vel_now = vec_env.envs[0].max_ang_vel
         avg_ep_time = (time.perf_counter() - t_start) / (ep + 1)
         print(f"ep {ep:4d} | "
               f"reward {ep_reward:7.2f} | "
@@ -252,11 +342,14 @@ def train_agent():
               f"kills {eval_env.kills:3d} | "
               f"buf {len(agent.buffer.buf):6d} | "
               f"steps {total_steps:7d} | "
-              f"ang_vel {ang_vel_now:.2f} | "
               f"avg_ep_time {avg_ep_time:.2f}s")
 
         if critic_eval_every and ep % critic_eval_every == 0 and ep > 0:
-            critic_stats = evaluate_critic(agent, eval_env, n_episodes=5, gamma=agent_cfg.get("gamma", 0.99))
+            critic_stats = evaluate_critic(
+                agent, eval_env, n_episodes=5,
+                gamma=agent_cfg.get("gamma", 0.99),
+                sample_every=sample_every
+            )
             print(f"  [critic] EV={critic_stats['explained_variance']:.3f} "
                   f"MAE={critic_stats['mae']:.3f} "
                   f"Q_mean={critic_stats['q_mean']:.2f} "
