@@ -39,3 +39,21 @@ train:
   seed: 42
   eval_episodes: 3
   log_window: 10
+
+run:
+  mode: baseline  # manual | baseline | agent
+  renderer: 3d
+  fps: 30
+  stochastic_agent: true
+  do_gif: true
+  gif_directory: tmp_gif  # tmp_gif | important_gif
+  gif_name: run_baseline_30fps.gif
+  gif_fps: 30
+
+  # fps -- частота кадров для рендера
+  # do_gif -- сохранять ли гифку
+  # gif_directory -- папка для сохранения гифки - в important_gif обязательно содержательное название
+  # tmp_gif лжит в giтигноре, поэтому не загружается на гит
+
+  # gif_fps -- частота кадров для гифки
+  # го договоримся что в important_gif будем 30 fps, а для себя какой хотите (чтоб ускорить созранение)

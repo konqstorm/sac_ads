@@ -1,16 +1,25 @@
 import os
-import yaml
 import numpy as np
 import torch
 
 from env import AsteroidDefenseEnv
+from gif_recorder import GIFRecorder
 from models import Actor
+from runtime_options import (
+    load_config,
+    load_ursina_loop,
+    resolve_do_gif,
+    resolve_fps,
+    resolve_gif_directory,
+    resolve_gif_fps,
+    resolve_gif_name,
+    resolve_renderer,
+    resolve_stochastic_agent,
+)
 from visual_pygame import PygameRenderer
 
 
-def _load_env(cfg_path="config.yaml"):
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
+def _load_env(cfg):
     return AsteroidDefenseEnv(cfg["env"])
 
 
@@ -42,12 +51,44 @@ def _act_stochastic(actor, obs):
     return action.numpy()[0]
 
 
-def run_agent(cfg_path="config.yaml", weights_dir="weights", stochastic=True):
-    env = _load_env(cfg_path)
+def run_agent(cfg_path="config.yaml", weights_dir="weights", stochastic=True, renderer=None):
+    cfg = load_config(cfg_path)
+    env = _load_env(cfg)
     obs, _ = env.reset()
     actor = _load_actor(env, weights_dir=weights_dir)
+    renderer_name = resolve_renderer(cfg, renderer=renderer)
+    fps = resolve_fps(cfg, default=30)
+    stochastic = resolve_stochastic_agent(cfg, stochastic=stochastic, default=True)
+    gif_fps = resolve_gif_fps(cfg, default=fps)
+    gif_recorder = GIFRecorder(
+        enabled=resolve_do_gif(cfg, default=False),
+        directory=resolve_gif_directory(cfg, default="tmp_gif"),
+        name=resolve_gif_name(cfg, default="agent_run.gif"),
+        fps=gif_fps,
+    )
 
-    renderer = PygameRenderer(title="Asteroid Defense - Trained Agent")
+    if renderer_name == "3d":
+        run_ursina_loop = load_ursina_loop()
+
+        def _act(current_obs):
+            if stochastic:
+                return _act_stochastic(actor, current_obs)
+            return _act_deterministic(actor, current_obs)
+
+        run_ursina_loop(
+            env=env,
+            title="Asteroid Defense - Trained Agent (3D)",
+            fps=fps,
+            action_fn=_act,
+            initial_obs=obs,
+            extra_lines_fn=lambda _obs: [
+                f"Policy: {'stochastic' if stochastic else 'deterministic'}"
+            ],
+            gif_recorder=gif_recorder,
+        )
+        return
+
+    renderer = PygameRenderer(title="Asteroid Defense - Trained Agent", gif_recorder=gif_recorder)
     total_reward = 0.0
 
     running = True
@@ -57,7 +98,7 @@ def run_agent(cfg_path="config.yaml", weights_dir="weights", stochastic=True):
         obs, reward, done, _, _ = env.step(action)
         total_reward += reward
 
-        renderer.draw(env, reward=reward, total_reward=total_reward)
+        renderer.draw(env, reward=reward, total_reward=total_reward, fps=fps)
 
         if done:
             obs, _ = env.reset()
@@ -67,4 +108,4 @@ def run_agent(cfg_path="config.yaml", weights_dir="weights", stochastic=True):
 
 
 if __name__ == "__main__":
-    run_agent(stochastic=True)
+    run_agent(stochastic=None, renderer=None)

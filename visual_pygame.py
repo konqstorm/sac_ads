@@ -100,7 +100,7 @@ def _occlusion_indices(lines, asteroids):
 
 
 class PygameRenderer:
-    def __init__(self, width=800, height=600, title="Asteroid Defense"):
+    def __init__(self, width=800, height=600, title="Asteroid Defense", gif_recorder=None):
         pygame.init()
         self.width = width
         self.height = height
@@ -110,6 +110,7 @@ class PygameRenderer:
         self.clock = pygame.time.Clock()
         self.show_dead_zone = False
         self._dead_zone_cache = None
+        self.gif_recorder = gif_recorder
 
     def process_events(self):
         for event in pygame.event.get():
@@ -252,8 +253,15 @@ class PygameRenderer:
                 self.screen.blit(text, (10, y))
                 y += 18
 
+        if self.gif_recorder is not None:
+            frame = pygame.surfarray.array3d(self.screen)
+            frame = np.transpose(frame, (1, 0, 2))
+            self.gif_recorder.add_frame(frame)
+
         pygame.display.flip()
         self.clock.tick(fps)
 
     def close(self):
+        if self.gif_recorder is not None:
+            self.gif_recorder.save()
         pygame.quit()

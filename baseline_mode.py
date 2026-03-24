@@ -1,13 +1,21 @@
-import yaml
 import numpy as np
 
 from env import AsteroidDefenseEnv
+from gif_recorder import GIFRecorder
+from runtime_options import (
+    load_config,
+    load_ursina_loop,
+    resolve_do_gif,
+    resolve_fps,
+    resolve_gif_directory,
+    resolve_gif_fps,
+    resolve_gif_name,
+    resolve_renderer,
+)
 from visual_pygame import PygameRenderer
 
 
-def _load_env(cfg_path="config.yaml"):
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
+def _load_env(cfg):
     return AsteroidDefenseEnv(cfg["env"])
 
 
@@ -93,12 +101,43 @@ class BaselineController:
         return np.array([yaw_action, pitch_action, fire_action], dtype=np.float32)
 
 
-def run_baseline(cfg_path="config.yaml"):
-    env = _load_env(cfg_path)
+def run_baseline(cfg_path="config.yaml", renderer=None):
+    cfg = load_config(cfg_path)
+    env = _load_env(cfg)
     obs, _ = env.reset()
     controller = BaselineController(env)
+    renderer_name = resolve_renderer(cfg, renderer=renderer)
+    fps = resolve_fps(cfg, default=30)
+    gif_fps = resolve_gif_fps(cfg, default=fps)
+    gif_recorder = GIFRecorder(
+        enabled=resolve_do_gif(cfg, default=False),
+        directory=resolve_gif_directory(cfg, default="tmp_gif"),
+        name=resolve_gif_name(cfg, default="baseline_run.gif"),
+        fps=gif_fps,
+    )
 
-    renderer = PygameRenderer(title="Asteroid Defense - Baseline")
+    if renderer_name == "3d":
+        run_ursina_loop = load_ursina_loop()
+        state = {"controller": controller}
+
+        def _act(_obs):
+            return state["controller"].act()
+
+        def _on_episode_reset():
+            state["controller"] = BaselineController(env)
+
+        run_ursina_loop(
+            env=env,
+            title="Asteroid Defense - Baseline (3D)",
+            fps=fps,
+            action_fn=_act,
+            initial_obs=obs,
+            on_episode_reset=_on_episode_reset,
+            gif_recorder=gif_recorder,
+        )
+        return
+
+    renderer = PygameRenderer(title="Asteroid Defense - Baseline", gif_recorder=gif_recorder)
     total_reward = 0.0
 
     running = True
@@ -108,7 +147,7 @@ def run_baseline(cfg_path="config.yaml"):
         obs, reward, done, _, _ = env.step(action)
         total_reward += reward
 
-        renderer.draw(env, reward=reward, total_reward=total_reward)
+        renderer.draw(env, reward=reward, total_reward=total_reward, fps=fps)
 
         if done:
             obs, _ = env.reset()
