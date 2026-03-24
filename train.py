@@ -6,10 +6,10 @@ import matplotlib.pyplot as plt
 import random
 import time
 
-from env import AsteroidDefenseEnv
-from vec_env import VecEnv
-from models import Actor, Critic
-from sac import SAC
+from core.env import AsteroidDefenseEnv
+from core.vec_env import VecEnv
+from core.models import Actor, Critic
+from core.sac import SAC
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ def evaluate_critic(agent, env, n_episodes=5, gamma=0.99):
 # ---------------------------------------------------------------------------
 
 def train_agent():
-    with open("config.yaml") as f:
+    with open(os.path.join("configs", "config.yaml")) as f:
         cfg = yaml.safe_load(f)
 
     env_cfg   = cfg["env"]

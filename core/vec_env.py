@@ -1,5 +1,5 @@
 import numpy as np
-from env import AsteroidDefenseEnv
+from core.env import AsteroidDefenseEnv
 
 
 class VecEnv:

@@ -18,6 +18,8 @@ class AsteroidDefenseEnv(gym.Env):
         self.impact_radius = config.get("impact_radius", 5.0)
         self.max_asteroids = config.get("max_asteroids", 3)
         self.spawn_prob = config.get("spawn_prob", 0.05)
+        self.total_asteroids = config.get("total_asteroids", 40)
+        self.max_hp = config.get("max_hp", 20)
         
         # Размеры видимого "окна" в космос по осям X и Z (для нормировки)
         self.world_width = config.get("world_width", 100.0)
@@ -48,6 +50,10 @@ class AsteroidDefenseEnv(gym.Env):
         self.reward_hit = config.get("reward_hit", 1.0)
         self.reward_impact = config.get("reward_impact", -1.0)
         self.reward_shot = config.get("reward_shot", -0.1)
+        self.reward_win = config.get("reward_win", 0.0)
+        self.reward_lose = config.get("reward_lose", 0.0)
+        self.aim_reward_scale = config.get("aim_reward_scale", 0.01)
+        self.aim_quality_denom = config.get("aim_quality_denom", 0.1)
 
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
         # 5 asteroids * (err_yaw, err_pitch, time_to_impact_norm, dist_norm) = 20
@@ -65,10 +71,16 @@ class AsteroidDefenseEnv(gym.Env):
         self.kills = 0
         self.hull_damage = 0
         self._next_asteroid_id = 0
+        self.asteroids_remaining = int(self.total_asteroids)
+        self.hp = int(self.max_hp)
 
-        initial = options.get("initial_asteroids") if options else min(3, self.max_asteroids)
+        if options and "initial_asteroids" in options:
+            initial = int(options["initial_asteroids"])
+        else:
+            initial = min(self.max_asteroids, self.asteroids_remaining)
         for _ in range(initial):
             self.asteroids.append(self._spawn_asteroid())
+            self.asteroids_remaining -= 1
 
         return self._get_obs(), {}
 
@@ -134,30 +146,37 @@ class AsteroidDefenseEnv(gym.Env):
             if a["pos"][1] <= 0.0 or np.linalg.norm(a["pos"]) <= self.impact_radius:
                 reward += self.reward_impact
                 self.hull_damage += 1
+                self.hp -= 1
             else:
                 survivors.append(a)
         self.asteroids = survivors
 
-        # Спавн новых астероидов
-        if len(self.asteroids) < self.max_asteroids:
-            if np.random.rand() < self.spawn_prob:
+        # Спавн новых астероидов (вероятность 1, пока есть запас)
+        while len(self.asteroids) < self.max_asteroids and self.asteroids_remaining > 0:
+            if np.random.rand() < 1.0:
                 self.asteroids.append(self._spawn_asteroid())
+                self.asteroids_remaining -= 1
+            else:
+                break
 
         obs, yaw_errs, pitch_errs = self._get_obs(with_errors=True)
 
-        # Dense reward: только за прицел на самый срочный астероид (первый в obs).
-        # Поощрять прицеливание на все цели сразу бессмысленно — агент учится
-        # смотреть куда угодно лишь бы был хоть какой-то астероид рядом.
-        if yaw_errs:
-            ey, ep_ = yaw_errs[0], pitch_errs[0]
-            aim_quality = max(0.0, 1.0 - (ey * ey + ep_ * ep_) / 0.1)
-            reward += 0.02 * aim_quality
+        for ey, ep_ in zip(yaw_errs, pitch_errs):
+            aim_quality = max(0.0, 1.0 - (ey * ey + ep_ * ep_) / self.aim_quality_denom)
+            reward += self.aim_reward_scale * aim_quality
 
-        done = self.step_count >= self.max_steps
+        done = False
+        if self.hp <= 0:
+            reward += self.reward_lose
+            done = True
+        elif self.asteroids_remaining == 0 and len(self.asteroids) == 0:
+            reward += self.reward_win
+            done = True
+        elif self.step_count >= self.max_steps:
+            done = True
         return obs, reward, done, False, {}
 
     def _spawn_asteroid(self):
-        # Спавним строго "вдалеке" по оси Y, раскидывая по X и Z
         if self.spawn_x_range is not None or self.spawn_z_center is not None or self.spawn_z_range is not None:
             x_range = self.spawn_x_range if self.spawn_x_range is not None else self.world_width / 6.0
             z_center = self.spawn_z_center if self.spawn_z_center is not None else self.world_height / 2.0
@@ -170,7 +189,6 @@ class AsteroidDefenseEnv(gym.Env):
             z = np.random.uniform(self.spawn_z_min, self.spawn_z_max)
         y = self.spawn_y
 
-        # Скорость направлена К игроку (-Y)
         vx = np.random.uniform(-self.asteroid_speed_xz_max, self.asteroid_speed_xz_max)
         vy = -np.random.uniform(self.asteroid_speed_y_min, self.asteroid_speed_y_max)
         vz = np.random.uniform(-self.asteroid_speed_xz_max, self.asteroid_speed_xz_max)
@@ -184,7 +202,6 @@ class AsteroidDefenseEnv(gym.Env):
         return ast
 
     def _gun_direction(self):
-        # Перевод углов поворота в 3D направляющий вектор
         pitch_total = self.base_pitch + self.pitch
         x_dir = np.cos(pitch_total) * np.sin(self.yaw)
         y_dir = np.cos(pitch_total) * np.cos(self.yaw)
@@ -192,7 +209,6 @@ class AsteroidDefenseEnv(gym.Env):
         return np.array([x_dir, y_dir, z_dir], dtype=np.float32)
 
     def _solve_intercept(self, r, v, s):
-        # Solve |r + v t| = s t, return smallest positive t or None
         a = np.dot(v, v) - s * s
         b = 2.0 * np.dot(r, v)
         c = np.dot(r, r)
@@ -220,7 +236,7 @@ class AsteroidDefenseEnv(gym.Env):
     def _spawn_projectile(self):
         direction = self._gun_direction()
         return {
-            "pos": np.zeros(3, dtype=np.float32), # Вылет из (0,0,0)
+            "pos": np.zeros(3, dtype=np.float32), 
             "vel": direction * self.projectile_speed,
         }
 

@@ -1,12 +1,13 @@
+import os
 import yaml
 import numpy as np
 import pygame
 
-from env import AsteroidDefenseEnv
-from visual_pygame import PygameRenderer
+from core.env import AsteroidDefenseEnv
+from core.visual_pygame import PygameRenderer
 
 
-def _load_env(cfg_path="config.yaml"):
+def _load_env(cfg_path=os.path.join("configs", "config.yaml")):
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
     return AsteroidDefenseEnv(cfg["env"])
@@ -27,7 +28,7 @@ def _format_obs(obs):
     return " | ".join([f"{l}={v:+.3f}" for l, v in zip(labels, obs)])
 
 
-def run_manual(cfg_path="config.yaml"):
+def run_manual(cfg_path=os.path.join("configs", "config_eval.yaml")):
     env = _load_env(cfg_path)
     obs, _ = env.reset()
 

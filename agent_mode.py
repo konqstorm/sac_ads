@@ -3,12 +3,12 @@ import yaml
 import numpy as np
 import torch
 
-from env import AsteroidDefenseEnv
-from models import Actor
-from visual_pygame import PygameRenderer
+from core.env import AsteroidDefenseEnv
+from core.models import Actor
+from core.visual_pygame import PygameRenderer
 
 
-def _load_env(cfg_path="config.yaml"):
+def _load_env(cfg_path=os.path.join("configs", "config.yaml")):
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
     return AsteroidDefenseEnv(cfg["env"])
@@ -42,7 +42,7 @@ def _act_stochastic(actor, obs):
     return action.numpy()[0]
 
 
-def run_agent(cfg_path="config.yaml", weights_dir="weights", stochastic=True):
+def run_agent(cfg_path=os.path.join("configs", "config.yaml"), weights_dir="weights", stochastic=True):
     env = _load_env(cfg_path)
     obs, _ = env.reset()
     actor = _load_actor(env, weights_dir=weights_dir)

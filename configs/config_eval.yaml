@@ -1,11 +1,15 @@
 env:
   # --- физика ---
-  max_steps: 1000
+  max_steps: 10000
   dt: 0.033
   fov: 1.57                   # 90 градусов
   fire_threshold: 0.0
   projectile_speed: 150.0
   projectile_max_dist: 250.0
+
+  # --- длительность игры ---
+  total_asteroids: 20
+  max_hp: 5
 
   # --- астероиды ---
   asteroid_radius: 4.0
@@ -20,6 +24,10 @@ env:
   reward_hit: 10.0
   reward_impact: -10.0
   reward_shot: 0.0
+  reward_win: 50.0
+  reward_lose: -50.0
+  aim_reward_scale: 0.01
+  aim_quality_denom: 0.1
 
   # Начальные значения — будут перезаписаны curriculum-ом на старте
   max_ang_vel: 1.0
@@ -32,7 +40,7 @@ env:
   asteroid_speed_y_max: 16.0
   asteroid_speed_xz_max: 6.0
 
-  max_ang_vel: 0.2
+  max_ang_vel: 0.1
   max_asteroids: 3
   spawn_prob: 0.04
   
