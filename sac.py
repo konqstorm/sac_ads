@@ -29,14 +29,24 @@ class SAC:
 
         self.gamma = config["gamma"]
         self.tau = config["tau"]
-        self.alpha = config["alpha"]
 
-        self.opt_actor = torch.optim.Adam(actor.parameters(), lr=config["lr"])
-        self.opt_critic1 = torch.optim.Adam(critic1.parameters(), lr=config["lr"])
-        self.opt_critic2 = torch.optim.Adam(critic2.parameters(), lr=config["lr"])
+        # automatic entropy tuning
+        self.target_entropy = -actor.mean.out_features
+        init_alpha = config.get("alpha", 0.2)
+        self.log_alpha = torch.tensor(np.log(init_alpha), requires_grad=True)
+
+        lr_actor = config.get("lr_actor", config.get("lr", 3e-4))
+        lr_critic = config.get("lr_critic", config.get("lr", 3e-4))
+
+        self.opt_alpha = torch.optim.Adam([self.log_alpha], lr=lr_actor)
+        self.opt_actor = torch.optim.Adam(actor.parameters(), lr=lr_actor)
+        self.opt_critic1 = torch.optim.Adam(critic1.parameters(), lr=lr_critic)
+        self.opt_critic2 = torch.optim.Adam(critic2.parameters(), lr=lr_critic)
 
         self.buffer = ReplayBuffer(config["buffer_size"])
         self.batch_size = config["batch_size"]
+        self.policy_delay = config.get("policy_delay", 2)
+        self._update_count = 0
 
     def act(self, state):
         state = torch.tensor(state.flatten(), dtype=torch.float32).unsqueeze(0)
@@ -76,7 +86,8 @@ class SAC:
 
             q1_t = self.target1(s2, a2)
             q2_t = self.target2(s2, a2)
-            q_t = torch.min(q1_t, q2_t) - self.alpha * logp
+            alpha = self.log_alpha.exp()
+            q_t = torch.min(q1_t, q2_t) - alpha * logp
 
             target = r + self.gamma * (1 - d) * q_t
 
@@ -94,25 +105,34 @@ class SAC:
         loss_q2.backward()
         self.opt_critic2.step()
 
-        # actor
-        m, ls = self.actor(s)
-        std = ls.exp()
-        dist = torch.distributions.Normal(m, std)
-        
-        # Правильный сэмплинг и расчет logp с якобианом
-        u_new = dist.rsample()
-        a_new = torch.tanh(u_new)
-        logp = dist.log_prob(u_new).sum(-1, keepdim=True)
-        logp -= torch.log(1 - a_new.pow(2) + 1e-6).sum(-1, keepdim=True)
+        # actor + alpha (policy delay)
+        self._update_count += 1
+        if self._update_count % self.policy_delay == 0:
+            m, ls = self.actor(s)
+            std = ls.exp()
+            dist = torch.distributions.Normal(m, std)
+            
+            # Правильный сэмплинг и расчет logp с якобианом
+            u_new = dist.rsample()
+            a_new = torch.tanh(u_new)
+            logp = dist.log_prob(u_new).sum(-1, keepdim=True)
+            logp -= torch.log(1 - a_new.pow(2) + 1e-6).sum(-1, keepdim=True)
 
-        q1_new = self.critic1(s, a_new)
-        q2_new = self.critic2(s, a_new)
+            q1_new = self.critic1(s, a_new)
+            q2_new = self.critic2(s, a_new)
 
-        loss_actor = (self.alpha * logp - torch.min(q1_new, q2_new)).mean()
+            alpha = self.log_alpha.exp()
+            loss_actor = (alpha * logp - torch.min(q1_new, q2_new)).mean()
 
-        self.opt_actor.zero_grad()
-        loss_actor.backward()
-        self.opt_actor.step()
+            self.opt_actor.zero_grad()
+            loss_actor.backward()
+            self.opt_actor.step()
+
+            # alpha update
+            alpha_loss = -(self.log_alpha * (logp + self.target_entropy).detach()).mean()
+            self.opt_alpha.zero_grad()
+            alpha_loss.backward()
+            self.opt_alpha.step()
 
         # soft update
         for p, tp in zip(self.critic1.parameters(), self.target1.parameters()):

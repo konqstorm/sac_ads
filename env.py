@@ -50,9 +50,9 @@ class AsteroidDefenseEnv(gym.Env):
         self.reward_shot = config.get("reward_shot", -0.1)
 
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
-        # 5 asteroids * (err_yaw, err_pitch) = 10
+        # 5 asteroids * (err_yaw, err_pitch, time_to_impact_norm, dist_norm) = 20
         self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(10,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(20,), dtype=np.float32
         )
 
     def reset(self, seed=None, options=None):
@@ -143,8 +143,18 @@ class AsteroidDefenseEnv(gym.Env):
             if np.random.rand() < self.spawn_prob:
                 self.asteroids.append(self._spawn_asteroid())
 
+        obs, yaw_errs, pitch_errs = self._get_obs(with_errors=True)
+
+        # Dense reward: только за прицел на самый срочный астероид (первый в obs).
+        # Поощрять прицеливание на все цели сразу бессмысленно — агент учится
+        # смотреть куда угодно лишь бы был хоть какой-то астероид рядом.
+        if yaw_errs:
+            ey, ep_ = yaw_errs[0], pitch_errs[0]
+            aim_quality = max(0.0, 1.0 - (ey * ey + ep_ * ep_) / 0.1)
+            reward += 0.02 * aim_quality
+
         done = self.step_count >= self.max_steps
-        return self._get_obs(), reward, done, False, {}
+        return obs, reward, done, False, {}
 
     def _spawn_asteroid(self):
         # Спавним строго "вдалеке" по оси Y, раскидывая по X и Z
@@ -214,15 +224,26 @@ class AsteroidDefenseEnv(gym.Env):
             "vel": direction * self.projectile_speed,
         }
 
-    def _get_obs(self):
+    def _get_obs(self, with_errors=False):
         obs = []
-        # Сортируем астероиды по близости к игроку
+        yaw_errs = []
+        pitch_errs = []
+
         if self.asteroids:
-            dists = [np.linalg.norm(a["pos"]) for a in self.asteroids]
-            order = np.argsort(dists)
+            times = []
+            for a in self.asteroids:
+                t = self._solve_intercept(a["pos"], a["vel"], self.projectile_speed)
+                times.append(t if t is not None else 1e6)
+            order = np.argsort(times)
             selected = [self.asteroids[i] for i in order[:5]]
         else:
             selected = []
+
+        half_fov = self.fov / 2.0
+        max_time = self.spawn_y / max(1e-6, self.asteroid_speed_y_min)
+        max_dist = np.linalg.norm(
+            np.array([self.world_width / 2.0, self.spawn_y, self.world_height], dtype=np.float32)
+        )
 
         for a in selected:
             r = a["pos"].astype(np.float32)
@@ -233,15 +254,21 @@ class AsteroidDefenseEnv(gym.Env):
 
             err_yaw = target_yaw - self.yaw
             err_pitch = target_pitch - self.pitch
+            yaw_errs.append(err_yaw)
+            pitch_errs.append(err_pitch)
 
-            half_fov = self.fov / 2.0
-            err_yaw = np.clip(err_yaw / half_fov, -1.0, 1.0)
-            err_pitch = np.clip(err_pitch / half_fov, -1.0, 1.0)
+            err_yaw_n = np.clip(err_yaw / half_fov, -1.0, 1.0)
+            err_pitch_n = np.clip(err_pitch / half_fov, -1.0, 1.0)
 
-            obs.extend([err_yaw, err_pitch])
+            time_norm = 1.0 if t is None else np.clip(t / max_time, 0.0, 1.0)
+            dist_norm = np.clip(np.linalg.norm(r) / max_dist, 0.0, 1.0)
 
-        # Забиваем отсутствующие астероиды нулями
-        while len(obs) < 10:
-            obs.extend([0.0, 0.0])
+            obs.extend([err_yaw_n, err_pitch_n, time_norm, dist_norm])
 
-        return np.array(obs, dtype=np.float32)
+        while len(obs) < 20:
+            obs.extend([0.0, 0.0, 1.0, 1.0])
+
+        obs_arr = np.array(obs, dtype=np.float32)
+        if with_errors:
+            return obs_arr, yaw_errs, pitch_errs
+        return obs_arr

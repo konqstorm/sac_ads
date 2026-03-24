@@ -93,7 +93,7 @@ class BaselineController:
         return np.array([yaw_action, pitch_action, fire_action], dtype=np.float32)
 
 
-def run_baseline(cfg_path="config.yaml"):
+def run_baseline(cfg_path="config_eval.yaml"):
     env = _load_env(cfg_path)
     obs, _ = env.reset()
     controller = BaselineController(env)
