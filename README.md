@@ -32,8 +32,7 @@ In this repository, the word **slot** means one fixed asteroid position inside t
 10. [Plot Gallery](#plot-gallery)
 11. [Commands](#commands)
 12. [Project Layout](#layout)
-13. [Repository Notes and Caveats](#notes)
-14. [References](#references)
+13. [References](#references)
 
 <a id="overview"></a>
 
@@ -627,15 +626,6 @@ sac_ads/
 |- train_selector.py
 `- README.md
 ```
-
-<a id="notes"></a>
-
-## Repository Notes and Caveats
-
-- Prefer `python -m pip install -r requirements.txt` over `pip install -e .`. The current `pyproject.toml` still contains legacy module metadata from an older layout.
-- `run_agent.py` and `evaluate.py` do not use exactly the same target-retargeting logic. The visual runner defaults to `sample_every=5`, while `evaluate.py` uses `commit_steps`-style target commitment.
-- The checked-in metrics in `results/*.txt` are aggregate summaries only; they do not include per-episode breakdowns.
-- Some inline source comments are in Russian, while the public API and script names remain easy to follow.
 
 <a id="references"></a>
 
