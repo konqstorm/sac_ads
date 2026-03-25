@@ -443,9 +443,14 @@ class _SimulationLoop(Entity):
         )
 
         if done:
-            self.obs, _ = self.env.reset()
             if self.on_episode_reset is not None:
-                self.on_episode_reset()
+                maybe_obs = self.on_episode_reset()
+                if maybe_obs is not None:
+                    self.obs = maybe_obs
+                else:
+                    self.obs, _ = self.env.reset()
+            else:
+                self.obs, _ = self.env.reset()
             self.total_reward = 0.0
 
 

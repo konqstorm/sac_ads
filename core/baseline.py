@@ -1,18 +1,26 @@
-import os
-import yaml
 import numpy as np
 
-from core.env import AsteroidDefenseEnv
-from core.visual_pygame import PygameRenderer
+from .env import AsteroidDefenseEnv
+from visuals.gif_recorder import GIFRecorder
+from core.runtime_options import (
+    load_config,
+    load_ursina_loop,
+    resolve_do_gif,
+    resolve_fps,
+    resolve_gif_directory,
+    resolve_gif_fps,
+    resolve_gif_name,
+    resolve_renderer,
+)
+from visuals.visual_pygame import PygameRenderer
 
 
-def _load_env(cfg_path=os.path.join("configs", "config_eval.yaml")):
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
+def _load_env(cfg):
     return AsteroidDefenseEnv(cfg["env"])
 
 
 def _solve_intercept(r, v, s):
+    # Solve |r + v t| = s t
     a = np.dot(v, v) - s * s
     b = 2.0 * np.dot(r, v)
     c = np.dot(r, r)
@@ -39,10 +47,18 @@ def _direction_to_yaw_pitch(direction, base_pitch):
     return yaw, pitch
 
 
-class BestBaselineController:
+class BaselineController:
     def __init__(self, env):
         self.env = env
         self.fired_ids = set()
+        self.target_id = None
+
+    def _select_target(self):
+        candidates = [a for a in self.env.asteroids if a["id"] not in self.fired_ids]
+        if not candidates:
+            return None
+        dists = [np.linalg.norm(a["pos"]) for a in candidates]
+        return candidates[int(np.argmin(dists))]
 
     def _aim_point(self, asteroid):
         r = asteroid["pos"].astype(np.float32)
@@ -52,34 +68,19 @@ class BestBaselineController:
             return r
         return r + v * t
 
-    def _select_target(self):
-        candidates = [a for a in self.env.asteroids if a["id"] not in self.fired_ids]
-        if not candidates:
-            return None
-
-        best = None
-        best_score = None
-        for a in candidates:
-            aim_point = self._aim_point(a)
-            target_yaw, target_pitch = _direction_to_yaw_pitch(aim_point, self.env.base_pitch)
-            err_yaw = target_yaw - self.env.yaw
-            err_pitch = target_pitch - self.env.pitch
-            score = abs(err_yaw) + abs(err_pitch)
-            if best is None or score < best_score:
-                best = a
-                best_score = score
-        return best
-
     def act(self):
         target = self._select_target()
         if target is None:
             return np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
         aim_point = self._aim_point(target)
-        if np.linalg.norm(aim_point) < 1e-6:
+        direction = aim_point
+        if np.linalg.norm(direction) < 1e-6:
             return np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
-        target_yaw, target_pitch = _direction_to_yaw_pitch(aim_point, self.env.base_pitch)
+        target_yaw, target_pitch = _direction_to_yaw_pitch(direction, self.env.base_pitch)
+
+        # Clamp target to FOV
         half_fov = self.env.fov / 2.0
         target_yaw = np.clip(target_yaw, -half_fov, half_fov)
         target_pitch = np.clip(target_pitch, -half_fov, half_fov)
@@ -100,23 +101,43 @@ class BestBaselineController:
         return np.array([yaw_action, pitch_action, fire_action], dtype=np.float32)
 
 
-def run_best_baseline(cfg_path=os.path.join("configs", "config.yaml")):
-    env = _load_env(cfg_path)
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
-    visual_cfg = cfg.get("visual", {})
-    seed_list = cfg.get("visual_seeds", visual_cfg.get("seeds"))
-    seed_list = list(seed_list) if seed_list else []
-    seed_idx = 0
+def run_baseline(cfg_path="config.yaml", renderer=None):
+    cfg = load_config(cfg_path)
+    env = _load_env(cfg)
+    obs, _ = env.reset()
+    controller = BaselineController(env)
+    renderer_name = resolve_renderer(cfg, renderer=renderer)
+    fps = resolve_fps(cfg, default=30)
+    gif_fps = resolve_gif_fps(cfg, default=fps)
+    gif_recorder = GIFRecorder(
+        enabled=resolve_do_gif(cfg, default=False),
+        directory=resolve_gif_directory(cfg, default="tmp_gif"),
+        name=resolve_gif_name(cfg, default="baseline_run.gif"),
+        fps=gif_fps,
+    )
 
-    if seed_list:
-        obs, _ = env.reset(seed=seed_list[seed_idx % len(seed_list)])
-        seed_idx += 1
-    else:
-        obs, _ = env.reset()
-    controller = BestBaselineController(env)
+    if renderer_name == "3d":
+        run_ursina_loop = load_ursina_loop()
+        state = {"controller": controller}
 
-    renderer = PygameRenderer(title="Asteroid Defense - Best Baseline")
+        def _act(_obs):
+            return state["controller"].act()
+
+        def _on_episode_reset():
+            state["controller"] = BaselineController(env)
+
+        run_ursina_loop(
+            env=env,
+            title="Asteroid Defense - Baseline (3D)",
+            fps=fps,
+            action_fn=_act,
+            initial_obs=obs,
+            on_episode_reset=_on_episode_reset,
+            gif_recorder=gif_recorder,
+        )
+        return
+
+    renderer = PygameRenderer(title="Asteroid Defense - Baseline", gif_recorder=gif_recorder)
     total_reward = 0.0
 
     running = True
@@ -126,19 +147,15 @@ def run_best_baseline(cfg_path=os.path.join("configs", "config.yaml")):
         obs, reward, done, _, _ = env.step(action)
         total_reward += reward
 
-        renderer.draw(env, reward=reward, total_reward=total_reward)
+        renderer.draw(env, reward=reward, total_reward=total_reward, fps=fps)
 
         if done:
-            if seed_list:
-                obs, _ = env.reset(seed=seed_list[seed_idx % len(seed_list)])
-                seed_idx += 1
-            else:
-                obs, _ = env.reset()
-            controller = BestBaselineController(env)
+            obs, _ = env.reset()
+            controller = BaselineController(env)
             total_reward = 0.0
 
     renderer.close()
 
 
 if __name__ == "__main__":
-    run_best_baseline()
+    run_baseline()

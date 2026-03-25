@@ -50,3 +50,12 @@ agent:
   commit_steps: 15
 
 visual_seeds: [43, 44, 45]
+run:
+  mode: baseline  # manual | baseline | agent
+  renderer: 3d
+  fps: 30
+  stochastic_agent: true
+  do_gif: false
+  gif_directory: tmp_gif  # tmp_gif | important_gif
+  gif_name: run_baseline_30fps.gif
+  gif_fps: 30

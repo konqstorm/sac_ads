@@ -111,9 +111,12 @@ class PygameRenderer:
         self.show_dead_zone = False
         self._dead_zone_cache = None
         self.gif_recorder = gif_recorder
+        self.last_events = []
 
     def process_events(self):
-        for event in pygame.event.get():
+        events = pygame.event.get()
+        self.last_events = events
+        for event in events:
             if event.type == pygame.QUIT:
                 return False
             if event.type == pygame.KEYDOWN and event.key == pygame.K_z:

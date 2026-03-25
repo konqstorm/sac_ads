@@ -1,16 +1,29 @@
-import os
-import yaml
 import numpy as np
 import pygame
 
 from core.env import AsteroidDefenseEnv
-from core.visual_pygame import PygameRenderer
+from visuals.gif_recorder import GIFRecorder
+from core.runtime_options import (
+    load_config,
+    load_ursina_loop,
+    resolve_do_gif,
+    resolve_fps,
+    resolve_gif_directory,
+    resolve_gif_fps,
+    resolve_gif_name,
+    resolve_renderer,
+)
+from visuals.visual_pygame import PygameRenderer
 
 
-def _load_env(cfg_path=os.path.join("configs", "config.yaml")):
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
+def _load_env(cfg):
     return AsteroidDefenseEnv(cfg["env"])
+
+
+def _seed_list(cfg):
+    visual_cfg = cfg.get("visual", {})
+    seeds = cfg.get("visual_seeds", visual_cfg.get("seeds"))
+    return list(seeds) if seeds else []
 
 
 def _format_obs(obs):
@@ -36,26 +49,50 @@ def _format_obs(obs):
     return " | ".join([f"{l}={v:+.3f}" for l, v in zip(labels, obs[:expected_len])])
 
 
-def run_manual(cfg_path=os.path.join("configs", "config_aim.yaml")):
-    env = _load_env(cfg_path)
+def run_manual(cfg_path="configs/config_eval.yaml", renderer=None):
+    cfg = load_config(cfg_path)
+    env = _load_env(cfg)
+    renderer_name = resolve_renderer(cfg, renderer=renderer)
+    fps = resolve_fps(cfg, default=30)
+    gif_fps = resolve_gif_fps(cfg, default=fps)
+    gif_recorder = GIFRecorder(
+        enabled=resolve_do_gif(cfg, default=False),
+        directory=resolve_gif_directory(cfg, default="tmp_gif"),
+        name=resolve_gif_name(cfg, default="manual_run.gif"),
+        fps=gif_fps,
+    )
 
-    renderer = PygameRenderer(title="Asteroid Defense - Manual")
+    seeds = _seed_list(cfg)
+    seed_idx = 0
+
+    def reset_env():
+        nonlocal seed_idx
+        if seeds:
+            obs, _ = env.reset(seed=seeds[seed_idx % len(seeds)])
+            seed_idx += 1
+            return obs
+        obs, _ = env.reset()
+        return obs
+
+    obs = reset_env()
+
+    if renderer_name == "3d":
+        run_ursina_loop = load_ursina_loop()
+        run_ursina_loop(
+            env=env,
+            title="Asteroid Defense - Manual (3D)",
+            fps=fps,
+            initial_obs=obs,
+            on_episode_reset=reset_env,
+            manual_controls=True,
+            gif_recorder=gif_recorder,
+        )
+        return
+
+    renderer = PygameRenderer(title="Asteroid Defense - Manual", gif_recorder=gif_recorder)
     total_reward = 0.0
     frozen = False
     vel_buffer = {}
-
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
-    visual_cfg = cfg.get("visual", {})
-    seed_list = cfg.get("visual_seeds", visual_cfg.get("seeds"))
-    seed_list = list(seed_list) if seed_list else []
-    seed_idx = 0
-
-    if seed_list:
-        obs, _ = env.reset(seed=seed_list[seed_idx % len(seed_list)])
-        seed_idx += 1
-    else:
-        obs, _ = env.reset()
 
     running = True
     while running:
@@ -103,18 +140,14 @@ def run_manual(cfg_path=os.path.join("configs", "config_aim.yaml")):
         print(_format_obs(obs))
         print(f"reward={reward:+.3f}\n")
 
-        renderer.draw(env, reward=reward, total_reward=total_reward)
+        renderer.draw(env, reward=reward, total_reward=total_reward, fps=fps)
 
         if done:
-            if seed_list:
-                obs, _ = env.reset(seed=seed_list[seed_idx % len(seed_list)])
-                seed_idx += 1
-            else:
-                obs, _ = env.reset()
+            obs = reset_env()
             total_reward = 0.0
 
     renderer.close()
 
 
 if __name__ == "__main__":
-    run_manual(cfg_path='./configs/config_eval.yaml')
+    run_manual()

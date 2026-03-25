@@ -6,7 +6,7 @@ import numpy as np
 from core.env import AsteroidDefenseEnv
 from core.models_discrete import Actor, Critic
 from core.sac_discrete import SAC
-from core.baseline_mode import BaselineController
+from core.baseline import BaselineController
 from core.aimer import FrozenAimer
 from core.two_stage_agent import TwoStageAgent
 from core.aim_utils import extract_aim_obs
@@ -58,7 +58,7 @@ def _select_best_slot(env):
     return best_idx
 
 
-def run_eval(mode="baseline", cfg_path=os.path.join("configs", "config_select.yaml"), episodes=100):
+def run_eval(mode="baseline", cfg_path=os.path.join("configs", "config_eval.yaml"), episodes=100):
     env, cfg = _load_env(cfg_path)
 
     if mode == "baseline":
@@ -137,4 +137,4 @@ def run_eval(mode="baseline", cfg_path=os.path.join("configs", "config_select.ya
 
 
 if __name__ == "__main__":
-    run_eval(mode="baseline")
+    run_eval(mode="agent")

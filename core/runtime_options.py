@@ -84,7 +84,7 @@ def resolve_gif_fps(cfg, default=30):
 
 def load_ursina_loop():
     try:
-        from visual_ursina import run_ursina_loop
+        from visuals.visual_ursina import run_ursina_loop
 
         return run_ursina_loop
     except ModuleNotFoundError as exc:
