@@ -151,8 +151,8 @@ class UrsinaRenderer:
 
         self.hud = Text(
             text="Initializing 3D renderer...",
-            origin=(-0.5, 0.5),
-            position=(-0.49, 0.48),
+            origin=(-0.5, -0.5),
+            position=(-0.49, -0.48),
             scale=1.05,
             background=False,
             color=_c(250, 220, 150),
@@ -284,7 +284,6 @@ class UrsinaRenderer:
             lines.append(f"Step Reward: {reward:+.2f} | Total: {total_reward:+.2f}")
         lines.append(f"Kills: {self.env.kills} | Hull Damage: {self.env.hull_damage}")
         lines.append(f"Dead Zone: {'ON' if self.show_dead_zone else 'OFF'} (Z to toggle)")
-        lines.append("Camera: WASD + Mouse (+E/Q up/down) | Cannon: Arrows | Fire: Space")
         if extra_lines:
             lines.extend([str(line) for line in extra_lines])
         self.hud.text = "\n".join(lines)
