@@ -1,38 +1,24 @@
 env:
-  # --- физика ---
-  max_steps: 10000
+  max_steps: 2000
+
   dt: 0.033
-  fov: 1.57                   # 90 градусов
+  fov: 1.57
   fire_threshold: 0.0
   projectile_speed: 150.0
   projectile_max_dist: 250.0
 
-  # --- длительность игры ---
-  total_asteroids: 20
-  max_hp: 5
+  total_asteroids: 20 
+  max_hp: 10
 
-  # --- астероиды ---
   asteroid_radius: 4.0
   impact_radius: 20.0
+  max_asteroids: 5 
+  spawn_prob: 0.05
   spawn_y: 200.0
   spawn_z_min: 20.0
   spawn_z_max: 80.0
   world_width: 120.0
   world_height: 120.0
-
-  # --- награды ---
-  reward_hit: 10.0
-  reward_impact: -10.0
-  reward_shot: 0.0
-  reward_win: 50.0
-  reward_lose: -50.0
-  aim_reward_scale: 0.01
-  aim_quality_denom: 0.1
-
-  # Начальные значения — будут перезаписаны curriculum-ом на старте
-  max_ang_vel: 1.0
-  max_asteroids: 1
-  spawn_prob: 0.03
   spawn_x_range: 10.0
   spawn_z_center: 50.0
   spawn_z_range: 10.0
@@ -40,9 +26,27 @@ env:
   asteroid_speed_y_max: 16.0
   asteroid_speed_xz_max: 6.0
 
+  reward_hit: 10
+  reward_impact: -10.0
+  reward_shot: 0 
+  reward_no_shot: 0 
+  reward_win: 30.0
+  reward_lose: -30.0
+
   max_ang_vel: 0.1
-  max_asteroids: 3
-  spawn_prob: 0.04
-  
-  
-  
+
+agent:
+  gamma: 0.99
+  tau: 0.005
+  alpha: 0.2
+  lr_actor: 1.e-4
+  lr_critic: 3.e-4 
+  batch_size: 128
+  buffer_size: 200000
+  start_steps: 3000
+  update_every: 4
+  updates_per_step: 2 
+  policy_delay: 2 
+  commit_steps: 15
+
+visual_seeds: [43, 44, 45]

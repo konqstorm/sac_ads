@@ -94,9 +94,20 @@ class BaselineController:
         return np.array([yaw_action, pitch_action, fire_action], dtype=np.float32)
 
 
-def run_baseline(cfg_path=os.path.join("configs", "config_eval.yaml")):
+def run_baseline(cfg_path=os.path.join("configs", "config.yaml")):
     env = _load_env(cfg_path)
-    obs, _ = env.reset()
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+    visual_cfg = cfg.get("visual", {})
+    seed_list = cfg.get("visual_seeds", visual_cfg.get("seeds"))
+    seed_list = list(seed_list) if seed_list else []
+    seed_idx = 0
+
+    if seed_list:
+        obs, _ = env.reset(seed=seed_list[seed_idx % len(seed_list)])
+        seed_idx += 1
+    else:
+        obs, _ = env.reset()
     controller = BaselineController(env)
 
     renderer = PygameRenderer(title="Asteroid Defense - Baseline")
@@ -112,7 +123,11 @@ def run_baseline(cfg_path=os.path.join("configs", "config_eval.yaml")):
         renderer.draw(env, reward=reward, total_reward=total_reward)
 
         if done:
-            obs, _ = env.reset()
+            if seed_list:
+                obs, _ = env.reset(seed=seed_list[seed_idx % len(seed_list)])
+                seed_idx += 1
+            else:
+                obs, _ = env.reset()
             controller = BaselineController(env)
             total_reward = 0.0
 

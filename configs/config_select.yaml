@@ -1,0 +1,66 @@
+env:
+  # --- физика ---
+  max_steps: 2000              # total_asteroids=20 при max_asteroids=5 → ~200-300 шагов
+                              # 600 даёт запас, не раздувает буфер пустыми шагами
+  dt: 0.033
+  fov: 1.57
+  fire_threshold: 0.5         # было 0.0 — это баг, baseline всегда стрелял
+  projectile_speed: 150.0
+  projectile_max_dist: 250.0
+
+  # --- конечная игра ---
+  total_asteroids: 20         # конечный пул
+  max_hp: 10                   # жизней мало → агент чувствует цену каждого промаха
+
+  # --- астероиды ---
+  asteroid_radius: 4.0
+  impact_radius: 20.0
+  max_asteroids: 5            # одновременно на экране
+  spawn_prob: 0.05
+  spawn_y: 200.0
+  spawn_z_min: 20.0
+  spawn_z_max: 80.0
+  world_width: 120.0
+  world_height: 120.0
+  spawn_x_range: 10.0
+  spawn_z_center: 50.0
+  spawn_z_range: 10.0
+  asteroid_speed_y_min: 8.0
+  asteroid_speed_y_max: 16.0
+  asteroid_speed_xz_max: 6.0
+
+  # --- награды ---
+  reward_hit: 10
+  reward_impact: -10.0
+  reward_shot: 0            # baseline стреляет сам, штраф не нужен
+  reward_no_shot: 0     # небольшой штраф за шаг без выстрела
+  reward_win: 30.0            # небольшой бонус за зачистку
+  reward_lose: -30.0          # небольшой штраф за поражение
+
+  max_ang_vel: 0.1
+
+agent:
+  gamma: 0.99
+  tau: 0.005
+  alpha: 0.2                  # чуть выше — задача выбора цели требует exploration
+  lr_actor: 1.e-4
+  lr_critic: 3.e-4            # критик учится быстрее актора
+  batch_size: 128
+  buffer_size: 200000
+  start_steps: 3000           # небольшой прогрев — задача проще
+  update_every: 4
+  updates_per_step: 2         # было 4 — снижаем, критик деградировал при 4
+  policy_delay: 2             # актор обновляется раз в 2 шага критика
+  commit_steps: 15            # шагов держать цель до переключения.
+                              # При max_ang_vel=0.1: ~15*0.033=0.5с на наводку
+  target_switch_penalty: -0.5  # штраф за смену цели до выстрела
+  ghost_target_penalty: -5.0   # штраф за выбор пустого слота
+
+train:
+  episodes: 74
+  n_envs: 1
+  seed: 42
+  plot_every: 10
+  critic_eval_every: 20
+  save_dir_selector: results/weights_selector
+  plots_dir_selector: results/plots_selector

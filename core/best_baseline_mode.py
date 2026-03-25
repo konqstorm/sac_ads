@@ -6,14 +6,13 @@ from core.env import AsteroidDefenseEnv
 from core.visual_pygame import PygameRenderer
 
 
-def _load_env(cfg_path=os.path.join("configs", "config.yaml")):
+def _load_env(cfg_path=os.path.join("configs", "config_eval.yaml")):
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
     return AsteroidDefenseEnv(cfg["env"])
 
 
 def _solve_intercept(r, v, s):
-    # Solve |r + v t| = s t
     a = np.dot(v, v) - s * s
     b = 2.0 * np.dot(r, v)
     c = np.dot(r, r)
@@ -40,18 +39,10 @@ def _direction_to_yaw_pitch(direction, base_pitch):
     return yaw, pitch
 
 
-class BaselineController:
+class BestBaselineController:
     def __init__(self, env):
         self.env = env
         self.fired_ids = set()
-        self.target_id = None
-
-    def _select_target(self):
-        candidates = [a for a in self.env.asteroids if a["id"] not in self.fired_ids]
-        if not candidates:
-            return None
-        dists = [np.linalg.norm(a["pos"]) for a in candidates]
-        return candidates[int(np.argmin(dists))]
 
     def _aim_point(self, asteroid):
         r = asteroid["pos"].astype(np.float32)
@@ -61,19 +52,34 @@ class BaselineController:
             return r
         return r + v * t
 
+    def _select_target(self):
+        candidates = [a for a in self.env.asteroids if a["id"] not in self.fired_ids]
+        if not candidates:
+            return None
+
+        best = None
+        best_score = None
+        for a in candidates:
+            aim_point = self._aim_point(a)
+            target_yaw, target_pitch = _direction_to_yaw_pitch(aim_point, self.env.base_pitch)
+            err_yaw = target_yaw - self.env.yaw
+            err_pitch = target_pitch - self.env.pitch
+            score = abs(err_yaw) + abs(err_pitch)
+            if best is None or score < best_score:
+                best = a
+                best_score = score
+        return best
+
     def act(self):
         target = self._select_target()
         if target is None:
             return np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
         aim_point = self._aim_point(target)
-        direction = aim_point
-        if np.linalg.norm(direction) < 1e-6:
+        if np.linalg.norm(aim_point) < 1e-6:
             return np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
-        target_yaw, target_pitch = _direction_to_yaw_pitch(direction, self.env.base_pitch)
-
-        # Clamp target to FOV
+        target_yaw, target_pitch = _direction_to_yaw_pitch(aim_point, self.env.base_pitch)
         half_fov = self.env.fov / 2.0
         target_yaw = np.clip(target_yaw, -half_fov, half_fov)
         target_pitch = np.clip(target_pitch, -half_fov, half_fov)
@@ -94,12 +100,23 @@ class BaselineController:
         return np.array([yaw_action, pitch_action, fire_action], dtype=np.float32)
 
 
-def run_baseline(cfg_path=os.path.join("configs", "config_eval.yaml")):
+def run_best_baseline(cfg_path=os.path.join("configs", "config.yaml")):
     env = _load_env(cfg_path)
-    obs, _ = env.reset()
-    controller = BaselineController(env)
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+    visual_cfg = cfg.get("visual", {})
+    seed_list = cfg.get("visual_seeds", visual_cfg.get("seeds"))
+    seed_list = list(seed_list) if seed_list else []
+    seed_idx = 0
 
-    renderer = PygameRenderer(title="Asteroid Defense - Baseline")
+    if seed_list:
+        obs, _ = env.reset(seed=seed_list[seed_idx % len(seed_list)])
+        seed_idx += 1
+    else:
+        obs, _ = env.reset()
+    controller = BestBaselineController(env)
+
+    renderer = PygameRenderer(title="Asteroid Defense - Best Baseline")
     total_reward = 0.0
 
     running = True
@@ -112,12 +129,16 @@ def run_baseline(cfg_path=os.path.join("configs", "config_eval.yaml")):
         renderer.draw(env, reward=reward, total_reward=total_reward)
 
         if done:
-            obs, _ = env.reset()
-            controller = BaselineController(env)
+            if seed_list:
+                obs, _ = env.reset(seed=seed_list[seed_idx % len(seed_list)])
+                seed_idx += 1
+            else:
+                obs, _ = env.reset()
+            controller = BestBaselineController(env)
             total_reward = 0.0
 
     renderer.close()
 
 
 if __name__ == "__main__":
-    run_baseline()
+    run_best_baseline()
