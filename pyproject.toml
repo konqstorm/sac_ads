@@ -1,0 +1,34 @@
+[project]
+name = "sac_ads"
+version = "0.1.0"
+description = "Soft Actor-Critic implementation with adsorption environment"
+readme = "README.md"
+authors = [ { name = "Unknown", email = "unknown@example.com" } ]
+license = { text = "MIT" }
+requires-python = ">=3.8"
+
+dependencies = [
+    "numpy>=1.26,<2.0",
+    "torch>=2.0,<3.0",
+    "matplotlib>=3.8,<4.0",
+    "pygame>=2.5,<3.0",
+    "pyyaml>=6.0,<7.0",
+    "gymnasium>=0.29,<1.0",
+]
+
+[tool.setuptools]
+py-modules = [
+    "agent_mode",
+    "baseline_mode",
+    "env",
+    "manual_mode",
+    "models",
+    "run_modes",
+    "sac",
+    "train",
+    "visual_pygame",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
