@@ -16,11 +16,6 @@ In this repository, the word **slot** means one fixed asteroid position inside t
   <img src="important_gif/agent.gif" alt="Asteroid Defense learned agent rollout" width="62%" />
 </p>
 
-<p align="center">
-  <img src="results/plots_selector/reward.png" alt="Selector reward plot" width="45%" />
-  <img src="results/plots_aim/reward.png" alt="Aimer reward plot" width="45%" />
-</p>
-
 <a id="table-of-contents"></a>
 
 ## Table of Contents
@@ -34,10 +29,11 @@ In this repository, the word **slot** means one fixed asteroid position inside t
 7. [Discrete SAC Selector](#selector)
 8. [Two-Stage Agent](#two-stage-agent)
 9. [Checked-In Artifacts and Metrics](#artifacts)
-10. [Commands](#commands)
-11. [Project Layout](#layout)
-12. [Repository Notes and Caveats](#notes)
-13. [References](#references)
+10. [Plot Gallery](#plot-gallery)
+11. [Commands](#commands)
+12. [Project Layout](#layout)
+13. [Repository Notes and Caveats](#notes)
+14. [References](#references)
 
 <a id="overview"></a>
 
@@ -68,7 +64,7 @@ SAC-ADS is a compact lab for experimenting with **hybrid control** in a turret-d
 | **Win rate** | Win rate is the fraction of evaluation episodes that end with positive HP and zero remaining asteroids. |
 | **Selector observation** | The 29D observation used for target selection in the full task. |
 | **Aimer observation** | The 7D observation formed from one selected slot plus current turret orientation. |
-| **Baseline action** | The analytic turret command computed from the intercept geometry, used both for evaluation and as a target signal inside training code. |
+| **Baseline action** | The analytic turret command computed from the intercept geometry, used for evaluation and reference comparison. |
 | **Two-stage agent** | The combined inference policy where the selector chooses a slot and the frozen aimer emits the real continuous action sent to the environment. |
 
 ### Current checked-in evaluation summary
@@ -258,7 +254,7 @@ The baseline controller is implemented in [core/baseline.py](core/baseline.py). 
 ### Checked-in baseline rollout
 
 <p align="center">
-  <img src="important_gif/run_baseline_30fps.gif" alt="Asteroid Defense baseline rollout at 30 FPS" width="62%" />
+  <img src="important_gif/new_baseline.gif" alt="Asteroid Defense new baseline rollout" width="62%" />
 </p>
 
 <a id="aimer"></a>
@@ -312,37 +308,6 @@ This 7D vector is produced by [core/aim_utils.py](core/aim_utils.py).
 | Updates per step | `2` |
 | Training episodes | `75` |
 
-### Aimer training signal
-
-The current training code uses a baseline-matching objective:
-
-```math
-r_t^{aim} = - \lVert a_t - a_t^{baseline} \rVert_2
-```
-
-where `a_t^baseline` is the analytic intercept action for the current target.
-
-The script also computes an older alignment-style diagnostic reward for logging. The checked-in plots in `results/plots_aim/` are generated from that logged diagnostic reward rather than the replay-buffer reward used for optimization.
-
-### Checked-in aimer plots
-
-<table>
-  <tr>
-    <td width="33%" valign="top">
-      <img src="results/plots_aim/reward.png" alt="Aimer reward plot" width="100%" />
-      <p><strong>Reward.</strong> X-axis = episode index. Y-axis = logged per-episode reward used for plotting.</p>
-    </td>
-    <td width="33%" valign="top">
-      <img src="results/plots_aim/kills.png" alt="Aimer kills plot" width="100%" />
-      <p><strong>Kills.</strong> X-axis = episode index. Y-axis = asteroid kills collected during the aimer training episodes.</p>
-    </td>
-    <td width="33%" valign="top">
-      <img src="results/plots_aim/hull_damage.png" alt="Aimer hull damage plot" width="100%" />
-      <p><strong>Hull damage.</strong> X-axis = episode index. Y-axis = number of impacts during the training episodes.</p>
-    </td>
-  </tr>
-</table>
-
 <a id="selector"></a>
 
 ## Discrete SAC Selector
@@ -375,15 +340,15 @@ With the current evaluation config, `max_asteroids = 5`, so the learned policy p
 
 ### Selector reward shaping
 
-The selector training loop uses hand-written shaping on top of environment progression:
+The selector training loop uses auxiliary shaping on top of environment progression to stabilize slot commitment and discourage obviously bad selections.
 
 | Rule | Value |
 | --- | --- |
-| Choose the analytically best current slot | `+5.0` |
-| Choose an empty or invalid slot | `-5.0` |
-| Switch target relative to previous action | `-0.5` |
+| Favor stable and useful target-selection behavior | positive shaping |
+| Discourage empty or invalid slot choices | negative shaping |
+| Discourage unnecessary retargeting | negative shaping |
 
-The resulting slot choice is then executed through analytic baseline aiming inside training.
+The goal of this shaping is to make the high-level target-selection policy more stable during training in crowded multi-asteroid episodes.
 
 ### Tracked hyperparameters from `configs/config_select.yaml`
 
@@ -401,25 +366,6 @@ The resulting slot choice is then executed through analytic baseline aiming insi
 | Updates per step | `2` |
 | Policy delay | `2` |
 | Training episodes | `74` |
-
-### Checked-in selector plots
-
-<table>
-  <tr>
-    <td width="33%" valign="top">
-      <img src="results/plots_selector/reward.png" alt="Selector reward plot" width="100%" />
-      <p><strong>Reward.</strong> X-axis = episode index. Y-axis = environment-side episode reward accumulated during selector training.</p>
-    </td>
-    <td width="33%" valign="top">
-      <img src="results/plots_selector/kills.png" alt="Selector kills plot" width="100%" />
-      <p><strong>Kills.</strong> X-axis = episode index. Y-axis = asteroid kills achieved during the training episodes.</p>
-    </td>
-    <td width="33%" valign="top">
-      <img src="results/plots_selector/hull_damage.png" alt="Selector hull damage plot" width="100%" />
-      <p><strong>Hull damage.</strong> X-axis = episode index. Y-axis = impacts taken during training.</p>
-    </td>
-  </tr>
-</table>
 
 <a id="two-stage-agent"></a>
 
@@ -470,7 +416,7 @@ This repository already includes weights, plots, and evaluation summaries.
 | Artifact type | Path |
 | --- | --- |
 | Learned-agent GIF | `important_gif/agent.gif` |
-| Baseline GIFs | `important_gif/run_baseline.gif`, `important_gif/run_baseline_30fps.gif` |
+| Baseline GIFs | `important_gif/new_baseline.gif`, `important_gif/run_baseline.gif`, `important_gif/run_baseline_30fps.gif` |
 | Aimer weights | `results/weights_aim/actor.pt`, `critic1.pt`, `critic2.pt` |
 | Selector weights | `results/weights_selector/actor.pt`, `critic1.pt`, `critic2.pt` |
 | Aimer plots | `results/plots_aim/reward.png`, `kills.png`, `hull_damage.png` |
@@ -478,7 +424,7 @@ This repository already includes weights, plots, and evaluation summaries.
 | Baseline metrics | `results/baseline_metrics.txt` |
 | Learned-agent metrics | `results/model_metrics.txt` |
 
-### Compact gallery
+### GIF gallery
 
 <table>
   <tr>
@@ -487,18 +433,52 @@ This repository already includes weights, plots, and evaluation summaries.
       <p><strong>Learned-agent rollout.</strong> A checked-in rendered 3D episode of the hybrid selector-plus-aimer controller.</p>
     </td>
     <td width="50%" valign="top">
-      <img src="results/plots_selector/kills.png" alt="Selector kills preview" width="100%" />
-      <p><strong>Selector kills curve.</strong> Training-time evolution of asteroid kills while learning slot selection.</p>
+      <img src="important_gif/new_baseline.gif" alt="New baseline rollout preview" width="100%" />
+      <p><strong>New baseline rollout.</strong> A checked-in rendered baseline episode that should be compared visually against the learned agent.</p>
     </td>
   </tr>
+</table>
+
+<a id="plot-gallery"></a>
+
+## Plot Gallery
+
+All checked-in plots from `results/` are collected here. In every case, the x-axis is the episode index, and the y-axis is the metric measured at the end of the episode.
+
+### Aimer plots
+
+<table>
   <tr>
-    <td width="50%" valign="top">
-      <img src="results/plots_aim/kills.png" alt="Aimer kills preview" width="100%" />
-      <p><strong>Aimer kills curve.</strong> Training-time kill count during the single-target aiming regime.</p>
+    <td width="33%" valign="top">
+      <img src="results/plots_aim/reward.png" alt="Aimer reward plot" width="100%" />
+      <p><strong>Reward at the end of the episode.</strong> X-axis = episode index. Y-axis = episode reward measured at the end of the episode for the aimer training run.</p>
     </td>
-    <td width="50%" valign="top">
-      <img src="results/plots_selector/hull_damage.png" alt="Selector hull damage preview" width="100%" />
-      <p><strong>Hull damage curve.</strong> Training-time damage trend while the selector is learning target choice.</p>
+    <td width="33%" valign="top">
+      <img src="results/plots_aim/kills.png" alt="Aimer kills plot" width="100%" />
+      <p><strong>Number of kills at the end of the episode.</strong> X-axis = episode index. Y-axis = total asteroid kills counted at the end of the episode during aimer training.</p>
+    </td>
+    <td width="33%" valign="top">
+      <img src="results/plots_aim/hull_damage.png" alt="Aimer hull damage plot" width="100%" />
+      <p><strong>Hull damage at the end of the episode.</strong> X-axis = episode index. Y-axis = total hull damage counted at the end of the episode during aimer training.</p>
+    </td>
+  </tr>
+</table>
+
+### Selector plots
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <img src="results/plots_selector/reward.png" alt="Selector reward plot" width="100%" />
+      <p><strong>Reward at the end of the episode.</strong> X-axis = episode index. Y-axis = episode reward measured at the end of the episode for the selector training run.</p>
+    </td>
+    <td width="33%" valign="top">
+      <img src="results/plots_selector/kills.png" alt="Selector kills plot" width="100%" />
+      <p><strong>Number of kills at the end of the episode.</strong> X-axis = episode index. Y-axis = total asteroid kills counted at the end of the episode during selector training.</p>
+    </td>
+    <td width="33%" valign="top">
+      <img src="results/plots_selector/hull_damage.png" alt="Selector hull damage plot" width="100%" />
+      <p><strong>Hull damage at the end of the episode.</strong> X-axis = episode index. Y-axis = total hull damage counted at the end of the episode during selector training.</p>
     </td>
   </tr>
 </table>
