@@ -1,509 +1,646 @@
-# SAC-ADS: Soft Actor-Critic for Asteroid Defense System
+# SAC-ADS
 
-A reinforcement learning implementation using the Soft Actor-Critic (SAC) algorithm to train an agent for an Asteroid Defense game environment.
+**SAC-ADS** is a presentation-first reinforcement learning repository about defending a base from incoming asteroids with a turret.
 
-## Project Overview
+The repository currently combines three control ideas around one custom `Gymnasium` environment:
 
-This project implements a deep reinforcement learning agent that learns to defend against incoming asteroids using a cannon. The agent is trained using the Soft Actor-Critic algorithm, which is a state-of-the-art off-policy reinforcement learning method that emphasizes exploration through entropy regularization.
+- a **heuristic baseline** that analytically computes intercept points,
+- a **continuous SAC aimer** trained on a single-target aiming problem,
+- a **discrete SAC selector** that chooses which asteroid slot to engage in the full game.
 
-### Key Features
+At inference time, the learned system is a **two-stage agent**: the selector picks a target slot, and the frozen aimer produces the actual turret action `(yaw, pitch, fire)`.
 
-- **SAC Algorithm**: State-of-the-art entropy-regularized off-policy RL method
-- **Custom Gymnasium Environment**: AsteroidDefenseEnv with configurable parameters
-- **Visualizations**: PyGame-based rendering for real-time visualization
-- **Training Modes**: 
-  - Supervised training mode (`train.py`)
-  - Agent evaluation mode (`agent_mode.py`)
-  - Baseline policy mode (`baseline_mode.py`)
-  - Manual control mode (`manual_mode.py`)
+In this repository, the word **slot** means one fixed asteroid position inside the observation tensor. A slot can be either occupied by an asteroid or empty. The selector always predicts a slot index, so choosing an empty slot is a meaningful failure case during training.
 
-## Project Structure
+<p align="center">
+  <img src="important_gif/agent.gif" alt="Asteroid Defense learned agent rollout" width="62%" />
+</p>
 
+<a id="table-of-contents"></a>
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Asteroid Defense Environment](#environment)
+3. [Main Dependencies and Project Entry Points](#dependencies)
+4. [Mathematics and Notation](#mathematics)
+5. [Heuristic Baseline](#baseline)
+6. [Continuous SAC Aimer](#aimer)
+7. [Discrete SAC Selector](#selector)
+8. [Two-Stage Agent](#two-stage-agent)
+9. [Checked-In Artifacts and Metrics](#artifacts)
+10. [Plot Gallery](#plot-gallery)
+11. [Commands](#commands)
+12. [Project Layout](#layout)
+13. [Repository Notes and Caveats](#notes)
+14. [References](#references)
+
+<a id="overview"></a>
+
+## Overview
+
+SAC-ADS is a compact lab for experimenting with **hybrid control** in a turret-defense task. The project is built around one custom environment, but it studies that environment through multiple training views:
+
+- a **single-target aiming problem** for low-level control,
+- a **multi-target slot-selection problem** for high-level target choice,
+- a **full evaluation setting** where the frozen low-level policy and learned high-level policy are combined.
+
+### What the repository currently contains
+
+| Track | Scope | Method | Main checked-in outputs |
+| --- | --- | --- | --- |
+| Baseline | Full multi-asteroid defense task | Analytic intercept controller | 2 GIFs, `results/baseline_metrics.txt` |
+| Aimer | Single-target pretraining task | Continuous SAC | Actor and critics, 3 training plots |
+| Selector | Multi-target target-selection task | Discrete SAC | Actor and critics, 3 training plots |
+| Hybrid Agent | Full multi-asteroid defense task | Selector + frozen aimer | `important_gif/agent.gif`, `results/model_metrics.txt` |
+
+### Core definitions used throughout the README
+
+| Term | Definition |
+| --- | --- |
+| **Asteroid slot** | One fixed slot inside the observation tensor. Up to 5 slots are encoded in the full environment observation, and a slot may be empty. |
+| **Kill** | A kill is counted when a projectile intersects an asteroid and removes it from the environment. |
+| **Hull damage** | Hull damage counts how many asteroids reached the defense area or impact radius and damaged the base. |
+| **Win rate** | Win rate is the fraction of evaluation episodes that end with positive HP and zero remaining asteroids. |
+| **Selector observation** | The 29D observation used for target selection in the full task. |
+| **Aimer observation** | The 7D observation formed from one selected slot plus current turret orientation. |
+| **Baseline action** | The analytic turret command computed from the intercept geometry, used for evaluation and reference comparison. |
+| **Two-stage agent** | The combined inference policy where the selector chooses a slot and the frozen aimer emits the real continuous action sent to the environment. |
+
+### Current checked-in evaluation summary
+
+The table below reports the metrics stored in the checked-in files under `results/`.
+
+| Controller | Kills total | Hull damage total | Win rate | Source |
+| --- | --- | --- | --- | --- |
+| Heuristic baseline | `745` | `957` | `0.17` | `results/baseline_metrics.txt` |
+| Learned two-stage agent | `1110` | `803` | `0.66` | `results/model_metrics.txt` |
+
+<a id="environment"></a>
+
+## Asteroid Defense Environment
+
+The environment is implemented in [core/env.py](core/env.py). The turret sits at the origin, asteroids spawn above the defense area, and the agent must rotate and fire before they reach the base.
+
+### What happens in one episode
+
+- The environment spawns up to `max_asteroids` active asteroids at once.
+- Each asteroid moves with randomized velocity toward the defense area.
+- The turret updates `yaw` and `pitch` from the continuous action vector.
+- If `fire_action > fire_threshold`, the environment emits a projectile along the current gun direction.
+- Hits increase kills and grant `reward_hit`.
+- Impacts reduce HP, increase hull damage, and add `reward_impact`.
+- The episode ends when HP reaches zero, all asteroids are cleared, or `max_steps` is reached.
+
+### Environment variants used in this repository
+
+| Variant | Main config | Purpose | Active asteroids | HP | Observation | Action |
+| --- | --- | --- | --- | --- | --- | --- |
+| Aimer training | `configs/config_aim.yaml` | Learn low-level aiming and firing | `1` | `1` | `7D` | Continuous `Box(3)` |
+| Selector training | `configs/config_select.yaml` | Learn which slot to commit to | Up to `5` | `10` | `29D` | Discrete slot index |
+| Visual evaluation | `configs/config_eval.yaml` | Run baseline, manual, or hybrid agent | Up to `5` | `10` | `29D` | Continuous `Box(3)` |
+
+### Full observation definition
+
+The full environment observation has dimension `29`:
+
+```text
+5 asteroid slots x 5 features each = 25
++ hp_norm
++ remaining_norm
++ yaw_norm
++ pitch_norm
+= 29
 ```
+
+Each asteroid slot contributes:
+
+| Feature | Definition |
+| --- | --- |
+| `err_yaw` | Normalized yaw error between the turret and the analytic intercept direction for that slot. |
+| `err_pitch` | Normalized pitch error between the turret and the analytic intercept direction for that slot. |
+| `time_norm` | Normalized intercept time estimate. |
+| `dist_norm` | Normalized Euclidean distance to the asteroid. |
+| `t_impact_norm` | Normalized time-to-impact estimate. |
+
+If a slot is empty, the environment fills it with a padded placeholder vector.
+
+### Environment action definition
+
+The physical turret action is always a 3D continuous vector:
+
+```math
+a_t = (u^{yaw}_t, u^{pitch}_t, u^{fire}_t) \in [-1, 1]^3
+```
+
+| Component | Meaning |
+| --- | --- |
+| `u_yaw` | Angular velocity command for yaw. |
+| `u_pitch` | Angular velocity command for pitch. |
+| `u_fire` | Fire trigger; the environment shoots when this exceeds `fire_threshold`. |
+
+<a id="dependencies"></a>
+
+## Main Dependencies and Project Entry Points
+
+### Main runtime dependencies
+
+| Dependency | Role in the repository |
+| --- | --- |
+| `python` | Runtime for all scripts and training code |
+| `torch` | Neural network training for the aimer and selector |
+| `numpy` | Environment math, geometry, and observation processing |
+| `gymnasium` | Environment API and `spaces.Box` definitions |
+| `pygame` | 2D renderer for interactive runs |
+| `ursina` | Optional 3D renderer for visual runs |
+| `matplotlib` | Plot generation for training curves |
+| `pillow` | GIF writing support |
+| `pyyaml` | Config loading from `configs/*.yaml` |
+
+### Key files
+
+| File | Purpose |
+| --- | --- |
+| [core/env.py](core/env.py) | Custom `AsteroidDefenseEnv` implementation |
+| [core/baseline.py](core/baseline.py) | Heuristic intercept controller |
+| [core/aim_utils.py](core/aim_utils.py) | Converts full observation into 7D aimer observation |
+| [core/aimer.py](core/aimer.py) | Loads frozen continuous aimer weights |
+| [core/two_stage_agent.py](core/two_stage_agent.py) | Combines selector and frozen aimer into one policy |
+| [train_aimer.py](train_aimer.py) | Trains the continuous low-level aimer |
+| [train_selector.py](train_selector.py) | Trains the discrete slot selector |
+| [run_agent.py](run_agent.py) | Runs the learned hybrid agent with rendering |
+| [run_baseline.py](run_baseline.py) | Runs the analytic baseline with rendering |
+| [run_manual.py](run_manual.py) | Manual play mode with keyboard controls |
+| [evaluate.py](evaluate.py) | Headless evaluation helper for baseline, aimer, or hybrid agent |
+
+<a id="mathematics"></a>
+
+## Mathematics and Notation
+
+This section defines the symbols used in the rest of the README.
+
+### Symbols
+
+- `o_t` is the observation at time step `t`.
+- `a_t` is the action applied to the environment at time step `t`.
+- `r_t` is the scalar reward returned by the environment.
+- `gamma` is the discount factor used in SAC.
+- `slot_t` is the discrete target slot chosen by the selector.
+- `o_t^aim` is the 7D aimer observation extracted from the selected slot.
+- `pi_sel` is the selector policy.
+- `pi_aim` is the aimer policy.
+
+### Full-task hybrid policy
+
+In the learned two-stage agent, the high-level and low-level policies are composed as:
+
+```math
+slot_t = \pi_{sel}(o_t)
+```
+
+```math
+o_t^{aim} = \text{extract\_aim\_obs}(o_t, slot_t)
+```
+
+```math
+a_t = \pi_{aim}(o_t^{aim})
+```
+
+### Environment reward
+
+The environment reward is configuration-driven, but structurally it follows:
+
+```math
+r_t =
+r_{hit}\,\mathbf{1}_{hit}
++
+r_{impact}\,\mathbf{1}_{impact}
++
+r_{shot}\,\mathbf{1}_{fire}
++
+r_{no\_shot}\,\mathbf{1}_{no\_fire}
++
+r_{win}\,\mathbf{1}_{win}
++
+r_{lose}\,\mathbf{1}_{lose}
+```
+
+The exact coefficients come from the YAML configs used by each script.
+
+<a id="baseline"></a>
+
+## Heuristic Baseline
+
+The baseline controller is implemented in [core/baseline.py](core/baseline.py). It is a deterministic, analytic policy rather than a learned model.
+
+### What the baseline actually does
+
+1. It selects the nearest active asteroid that has not already been fired at.
+2. It solves the projectile intercept equation for that asteroid.
+3. It converts the intercept point into target yaw and pitch.
+4. It applies proportional control by dividing angular error by one environment step.
+5. It fires when both yaw and pitch errors fall below `0.02` radians.
+
+### Baseline controller summary
+
+| Property | Behavior |
+| --- | --- |
+| Target choice | Nearest unfired asteroid |
+| Aiming logic | Closed-form intercept geometry |
+| Low-level control | Proportional angular correction |
+| Fire logic | Trigger when `|err_yaw| < 0.02` and `|err_pitch| < 0.02` |
+| Main use | Reference controller and visual comparison baseline |
+
+### Checked-in baseline rollout
+
+<p align="center">
+  <img src="important_gif/new_baseline_3d_20fps.gif" alt="Asteroid Defense new baseline rollout" width="62%" />
+</p>
+
+<a id="aimer"></a>
+
+## Continuous SAC Aimer
+
+The aimer is trained in [train_aimer.py](train_aimer.py) and uses the continuous models in [core/models_continuous.py](core/models_continuous.py).
+
+Its job is to solve the low-level control problem: given one target slot and the current turret orientation, produce the actual `(yaw, pitch, fire)` command.
+
+### Aimer observation
+
+The aimer input is `7D`:
+
+```text
+slot features (5) + current yaw_norm + current pitch_norm = 7
+```
+
+This 7D vector is produced by [core/aim_utils.py](core/aim_utils.py).
+
+### Aimer action
+
+| Output dimension | Meaning |
+| --- | --- |
+| `0` | Yaw command |
+| `1` | Pitch command |
+| `2` | Fire command |
+
+### Aimer architecture
+
+| Component | Definition |
+| --- | --- |
+| Encoder | `Linear(obs_dim, 256) -> ReLU` |
+| Actor heads | Mean and log-std heads over 3 continuous actions |
+| Critic input | Concatenated observation and action |
+| Critic body | `Linear(obs+act, 256) -> ReLU -> Linear(256, 256)` |
+
+### Tracked hyperparameters from `configs/config_aim.yaml`
+
+| Hyperparameter | Value |
+| --- | --- |
+| Discount factor `gamma` | `0.99` |
+| Target smoothing `tau` | `0.005` |
+| Entropy coefficient `alpha` | `0.2` |
+| Actor learning rate | `3e-4` |
+| Critic learning rate | `3e-4` |
+| Batch size | `512` |
+| Replay buffer size | `200000` |
+| Warm-up steps | `1000` |
+| Update frequency | Every `4` environment steps |
+| Updates per step | `2` |
+| Training episodes | `75` |
+
+<a id="selector"></a>
+
+## Discrete SAC Selector
+
+The selector is trained in [train_selector.py](train_selector.py) and uses the discrete models in [core/models_discrete.py](core/models_discrete.py).
+
+Its job is to solve the high-level decision problem: which asteroid slot should the controller engage right now?
+
+### Selector observation
+
+The selector consumes the full `29D` observation from the environment.
+
+### Selector action
+
+The selector outputs a discrete slot index:
+
+```math
+slot_t \in \{0, 1, \dots, max\_asteroids - 1\}
+```
+
+With the current evaluation config, `max_asteroids = 5`, so the learned policy predicts one of five slot indices.
+
+### Selector architecture
+
+| Component | Definition |
+| --- | --- |
+| Encoder | `Linear(29, 256) -> ReLU -> Linear(256, 256) -> ReLU` |
+| Actor head | One logit per slot |
+| Critic head | One Q-value per slot |
+
+### Selector reward shaping
+
+The selector training loop uses auxiliary shaping on top of environment progression to stabilize slot commitment and discourage obviously bad selections.
+
+| Rule | Value |
+| --- | --- |
+| Favor stable and useful target-selection behavior | positive shaping |
+| Discourage empty or invalid slot choices | negative shaping |
+| Discourage unnecessary retargeting | negative shaping |
+
+The goal of this shaping is to make the high-level target-selection policy more stable during training in crowded multi-asteroid episodes.
+
+### Tracked hyperparameters from `configs/config_select.yaml`
+
+| Hyperparameter | Value |
+| --- | --- |
+| Discount factor `gamma` | `0.99` |
+| Target smoothing `tau` | `0.005` |
+| Entropy coefficient `alpha` | `0.2` |
+| Actor learning rate | `1e-4` |
+| Critic learning rate | `3e-4` |
+| Batch size | `128` |
+| Replay buffer size | `200000` |
+| Warm-up steps | `3000` |
+| Update frequency | Every `4` environment steps |
+| Updates per step | `2` |
+| Policy delay | `2` |
+| Training episodes | `74` |
+
+<a id="two-stage-agent"></a>
+
+## Two-Stage Agent
+
+The learned full-task controller is assembled in [run_agent.py](run_agent.py) and [core/two_stage_agent.py](core/two_stage_agent.py).
+
+### How the hybrid controller works
+
+1. The selector receives the full `29D` observation.
+2. It predicts a discrete asteroid slot.
+3. The chosen slot is converted into a `7D` aimer observation.
+4. The frozen aimer produces the continuous turret action.
+5. The environment executes that action and returns the next observation.
+
+### Why this decomposition is useful
+
+- The selector solves a discrete resource-allocation problem.
+- The aimer solves continuous low-level turret control.
+- The hybrid split avoids forcing one policy to learn both target assignment and physical actuation from scratch.
+
+### Tracked evaluation result for the learned hybrid controller
+
+| Metric | Value |
+| --- | --- |
+| Kills total | `1110` |
+| Hull damage total | `803` |
+| Win rate | `0.66` |
+
+### Checked-in learned-agent rollout
+
+<p align="center">
+  <img src="important_gif/agent.gif" alt="Learned two-stage agent rollout" width="62%" />
+</p>
+
+This GIF is a 3D evaluation-style rollout of the learned hybrid controller rather than the heuristic baseline.
+It shows the selector choosing targets among several simultaneous asteroids while the frozen aimer drives the actual barrel motion and firing trajectory.
+The dotted yellow path is the projectile trajectory preview, and the episode overlay shows that the agent does score repeated kills while still allowing some impacts through, which matches the aggregate metrics in `results/model_metrics.txt`.
+
+<a id="artifacts"></a>
+
+## Checked-In Artifacts and Metrics
+
+This repository already includes weights, plots, and evaluation summaries.
+
+### Artifact inventory
+
+| Artifact type | Path |
+| --- | --- |
+| Learned-agent GIF | `important_gif/agent.gif` |
+| Baseline GIFs | `important_gif/new_baseline_3d_20fps.gif`, `important_gif/run_baseline.gif`, `important_gif/run_baseline_30fps.gif` |
+| Aimer weights | `results/weights_aim/actor.pt`, `critic1.pt`, `critic2.pt` |
+| Selector weights | `results/weights_selector/actor.pt`, `critic1.pt`, `critic2.pt` |
+| Aimer plots | `results/plots_aim/reward.png`, `kills.png`, `hull_damage.png` |
+| Selector plots | `results/plots_selector/reward.png`, `kills.png`, `hull_damage.png` |
+| Baseline metrics | `results/baseline_metrics.txt` |
+| Learned-agent metrics | `results/model_metrics.txt` |
+
+### GIF gallery
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="important_gif/agent.gif" alt="Learned agent rollout preview" width="100%" />
+      <p><strong>Learned-agent rollout.</strong> A checked-in rendered 3D episode of the hybrid selector-plus-aimer controller.</p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="important_gif/new_baseline_3d_20fps.gif" alt="New baseline rollout preview" width="100%" />
+      <p><strong>New baseline rollout.</strong> A checked-in rendered baseline episode that should be compared visually against the learned agent.</p>
+    </td>
+  </tr>
+</table>
+
+<a id="plot-gallery"></a>
+
+## Plot Gallery
+
+All checked-in plots from `results/` are collected here. In every case, the x-axis is the episode index, and the y-axis is the metric measured at the end of the episode.
+
+### Aimer plots
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <img src="results/plots_aim/reward.png" alt="Aimer reward plot" width="100%" />
+      <p><strong>Reward at the end of the episode.</strong> X-axis = episode index. Y-axis = episode reward measured at the end of the episode for the aimer training run.</p>
+    </td>
+    <td width="33%" valign="top">
+      <img src="results/plots_aim/kills.png" alt="Aimer kills plot" width="100%" />
+      <p><strong>Number of kills at the end of the episode.</strong> X-axis = episode index. Y-axis = total asteroid kills counted at the end of the episode during aimer training.</p>
+    </td>
+    <td width="33%" valign="top">
+      <img src="results/plots_aim/hull_damage.png" alt="Aimer hull damage plot" width="100%" />
+      <p><strong>Hull damage at the end of the episode.</strong> X-axis = episode index. Y-axis = total hull damage counted at the end of the episode during aimer training.</p>
+    </td>
+  </tr>
+</table>
+
+### Selector plots
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <img src="results/plots_selector/reward.png" alt="Selector reward plot" width="100%" />
+      <p><strong>Reward at the end of the episode.</strong> X-axis = episode index. Y-axis = episode reward measured at the end of the episode for the selector training run.</p>
+    </td>
+    <td width="33%" valign="top">
+      <img src="results/plots_selector/kills.png" alt="Selector kills plot" width="100%" />
+      <p><strong>Number of kills at the end of the episode.</strong> X-axis = episode index. Y-axis = total asteroid kills counted at the end of the episode during selector training.</p>
+    </td>
+    <td width="33%" valign="top">
+      <img src="results/plots_selector/hull_damage.png" alt="Selector hull damage plot" width="100%" />
+      <p><strong>Hull damage at the end of the episode.</strong> X-axis = episode index. Y-axis = total hull damage counted at the end of the episode during selector training.</p>
+    </td>
+  </tr>
+</table>
+
+<a id="commands"></a>
+
+## Commands
+
+The main install, train, and evaluation commands are listed here directly.
+
+### Install
+
+```bash
+python -m venv .venv
+```
+
+Windows:
+
+```bash
+.venv\Scripts\activate
+```
+
+macOS / Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### Train the aimer
+
+```bash
+python train_aimer.py
+```
+
+This uses `configs/config_aim.yaml` and writes:
+
+- weights to `results/weights_aim/`
+- plots to `results/plots_aim/`
+
+### Train the selector
+
+```bash
+python train_selector.py
+```
+
+This uses `configs/config_select.yaml` and writes:
+
+- weights to `results/weights_selector/`
+- plots to `results/plots_selector/`
+
+### Run the learned two-stage agent
+
+```bash
+python run_agent.py
+```
+
+### Run the heuristic baseline
+
+```bash
+python run_baseline.py
+```
+
+### Run manual mode
+
+```bash
+python run_manual.py
+```
+
+Manual controls:
+
+- `A/D` or left/right arrows: yaw
+- `W/S` or up/down arrows: pitch
+- `Space`: fire
+- `Q`: freeze or unfreeze asteroid motion
+
+### Headless evaluation
+
+The evaluation helper exposes a Python API instead of a full command-line parser.
+
+Default script entry:
+
+```bash
+python evaluate.py
+```
+
+Explicit evaluation calls:
+
+```bash
+python -c "from evaluate import run_eval; run_eval(mode='baseline', episodes=100)"
+python -c "from evaluate import run_eval; run_eval(mode='agent', episodes=100)"
+python -c "from evaluate import run_eval; run_eval(mode='aimer', episodes=100)"
+```
+
+### Visual configuration
+
+Visual scripts read `configs/config_eval.yaml`.
+
+Important fields there include:
+
+- `run.mode`: `manual`, `baseline`, or `agent`
+- `run.renderer`: `2d` or `3d`
+- `run.fps`
+- `run.do_gif`
+- `run.gif_directory`
+- `run.gif_name`
+
+<a id="layout"></a>
+
+## Project Layout
+
+```text
 sac_ads/
-├── core/                           # Core RL algorithms and environment
-│   ├── env.py                      # Asteroid Defense Environment
-│   ├── models_discrete.py          # Discrete action networks (selector)
-│   ├── models_continuous.py        # Continuous action networks (aimer)
-│   ├── sac_discrete.py             # SAC for discrete actions (selector)
-│   ├── sac_continuous.py           # SAC for continuous actions (aimer)
-│   ├── aimer.py                    # Frozen aimer controller
-│   ├── baseline.py                 # Heuristic baseline controller
-│   ├── two_stage_agent.py          # Combined selector + aimer agent
-│   ├── aim_utils.py                # Utility functions for aiming
-│   ├── runtime_options.py          # Configuration loading utilities
-│   ├── vec_env.py                  # Vectorized environment wrapper
-│   └── __init__.py
-├── visuals/                        # Visualization and rendering
-│   ├── visual_pygame.py            # PyGame rendering
-│   ├── visual_ursina.py            # Ursina 3D rendering
-│   ├── gif_recorder.py             # GIF recording utility
-│   └── __init__.py
-├── configs/                        # Configuration files
-│   ├── config_eval.yaml            # Evaluation configuration
-│   ├── config_select.yaml          # Selector agent configuration
-│   └── config_aim.yaml             # Aimer agent configuration
-├── train_selector.py               # Train selector agent (target selection)
-├── train_aimer.py                  # Train aimer agent (low-level control)
-├── evaluate.py                     # Evaluate trained agents
-├── run_agent.py                    # Evaluate trained agent with visualization
-├── run_baseline.py                 # Run baseline policy
-├── run_manual.py                   # Manual keyboard control mode
-├── pyproject.toml                  # Project dependencies and metadata
-├── requirements.txt                # Pinned dependency versions
-├── results/                        # Training results and outputs
-│   ├── weights_selector/           # Selector agent weights
-│   │   ├── actor.pt
-│   │   ├── critic1.pt
-│   │   └── critic2.pt
-│   ├── weights_aimer/              # Aimer agent weights
-│   │   ├── actor.pt
-│   │   ├── critic1.pt
-│   │   └── critic2.pt
-│   ├── plots_selector/             # Selector training plots
-│   ├── plots_aimer/                # Aimer training plots
-│   └── metrics/                    # Training metrics logs
-├── important_gif/                  # Saved evaluation GIFs
-└── .venv/                          # Python virtual environment
+|- configs/
+|  |- config_aim.yaml
+|  |- config_eval.yaml
+|  `- config_select.yaml
+|- core/
+|  |- aim_utils.py
+|  |- aimer.py
+|  |- baseline.py
+|  |- env.py
+|  |- models_continuous.py
+|  |- models_discrete.py
+|  |- runtime_options.py
+|  |- sac_continuous.py
+|  |- sac_discrete.py
+|  `- two_stage_agent.py
+|- important_gif/
+|- results/
+|- visuals/
+|  |- gif_recorder.py
+|  |- visual_pygame.py
+|  `- visual_ursina.py
+|- evaluate.py
+|- requirements.txt
+|- run_agent.py
+|- run_baseline.py
+|- run_manual.py
+|- train_aimer.py
+|- train_selector.py
+`- README.md
 ```
 
-## Installation
+<a id="notes"></a>
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd sac_ads
-   ```
+## Repository Notes and Caveats
 
-2. **Create a virtual environment** (recommended):
-   ```bash
-   python -m venv .venv
-   ```
+- Prefer `python -m pip install -r requirements.txt` over `pip install -e .`. The current `pyproject.toml` still contains legacy module metadata from an older layout.
+- `run_agent.py` and `evaluate.py` do not use exactly the same target-retargeting logic. The visual runner defaults to `sample_every=5`, while `evaluate.py` uses `commit_steps`-style target commitment.
+- The checked-in metrics in `results/*.txt` are aggregate summaries only; they do not include per-episode breakdowns.
+- Some inline source comments are in Russian, while the public API and script names remain easy to follow.
 
-   On Windows:
-   ```bash
-   .venv\Scripts\activate
-   ```
-
-   On macOS/Linux:
-   ```bash
-   source .venv/bin/activate
-   ```
-
-3. **Install dependencies**:
-   ```bash
-   python -m pip install -e .
-   ```
-
-## Dependencies
-
-The project requires the following Python packages:
-
-- **numpy** (>=1.26): Numerical computing
-- **torch** (>=2.0): Deep learning framework
-- **matplotlib** (>=3.8): Plotting and visualization
-- **pygame** (>=2.5): Game rendering and visualization
-- **pyyaml** (>=6.0): Configuration file parsing
-- **gymnasium** (>=0.29): Reinforcement learning environment API
-
-All dependencies are automatically installed when running `pip install -e .`
-
-## Usage
-
-### Training the Agent
-
-The project uses a **two-stage training approach**:
-
-**Stage 1: Train Selector Agent** (discrete actions - which asteroid to target)
-```bash
-python train_selector.py --config configs/config_select.yaml
-```
-
-**Stage 2: Train Aimer Agent** (continuous actions - low-level cannon control)
-```bash
-python train_aimer.py --config configs/config_aim.yaml
-```
-
-Configuration is loaded from YAML files in `configs/`. Modify these files to adjust:
-- Environment parameters (asteroid spawn rate, field of view, etc.)
-- Training hyperparameters (learning rates, network sizes, batch sizes, etc.)
-- Episode count and training duration
-
-### Running Evaluation & Modes
-
-Evaluate trained agents with different modes:
-
-```bash
-# Evaluate full TwoStageAgent (selector + frozen aimer) with visualization
-python run_agent.py --config configs/config_eval.yaml --renderer pygame
-
-# Run baseline heuristic controller (no learning required)
-python run_baseline.py --config configs/config_eval.yaml
-
-# Manual keyboard control (human plays the defense game)
-python run_manual.py --config configs/config_eval.yaml
-
-# Batch evaluation (no visualization)
-python evaluate.py --config configs/config_eval.yaml
-```
-
-### Configuration Files
-
-Edit configuration YAML files in `configs/` to customize:
-
-```yaml
-env:
-  max_steps: 1000
-  dt: 0.033                # Time step
-  fov: 1.5708              # π/2 radians, field of view
-  max_ang_vel: 2.0         # Max cannon rotation speed
-  max_asteroids: 5         # Max simultaneous targets
-
-agent:
-  hidden_dim: 256          # Actor/Critic network hidden dimension
-  learning_rate: 0.0003    # Optimizer learning rate
-  discount: 0.99           # γ (gamma) in SAC formulas
-  start_steps: 10000       # Random exploration steps before learning
-
-train:
-  episodes: 1000
-  seed: 42
-  batch_size: 256
-  replay_buffer_size: 100000
-
-visual:
-  seeds: [0, 42, 123]      # Deterministic test seeds
-  enabled: true
-  fps: 30
-```
-
-## Evaluation
-
-### Running Evaluation
-
-Evaluate trained agents using `evaluate.py`:
-
-```bash
-python evaluate.py --config configs/config_eval.yaml
-```
-
-### Evaluation Metrics
-
-The evaluation system tracks:
-- **Episode Reward**: Cumulative reward across evaluation episodes
-- **Asteroids Destroyed**: Count of successfully destroyed asteroids
-- **Hull Integrity**: Remaining health of the defense system
-- **Run Time**: Total duration of evaluation runs
-
-Results are saved to the `results/` directory with optional GIF recording for visualization.
-
-## Baselines
-
-The project includes two baseline strategies for comparison:
-
-### 1. BaselineController (Heuristic Baseline)
-
-Located in `core/baseline.py`, a deterministic rule-based controller that uses physics-based target interception:
-
-**Strategy:**
-1. **Select Target**: Choose closest asteroid by Euclidean distance
-2. **Compute Intercept Point**: Solve ballistic interception equation
-3. **Track Target**: Use proportional control to point cannon
-4. **Fire**: When pointing error < 0.02 rad, fire projectile
-
-**Advantages**: 
-- Interpretable, deterministic, fast
-- No training required
-- Good baseline for comparison
-
-**Limitations**: 
-- Fixed strategy (no learning)
-- Suboptimal in complex scenarios
-- Cannot adapt to new situations
-
-### 2. TwoStageAgent (Learned Agent)
-
-Located in `core/two_stage_agent.py`, combines learned selector with frozen aimer:
-
-**Architecture:**
-- **Selector**: Discrete policy (which asteroid to target)
-  - Input: observation
-  - Output: target slot index ∈ {0, 1, ..., num_asteroids}
-  - Training: `train_selector.py` with SAC (discrete actions)
-  
-- **Aimer**: Continuous policy (how to aim and fire)
-  - Input: observation + aim features
-  - Output: (yaw_velocity, pitch_velocity, fire)
-  - Training: `train_aimer.py` with SAC (continuous actions) - then frozen
-
-**Advantages**:
-- Data-driven learning from experience
-- Modular architecture (train components separately)
-- Interpretable two-stage decomposition
-
-**Limitations**:
-- Requires training two agents
-- Performance depends on aimer quality
-- Frozen aimer may not be optimal for all selector choices
-
-## Architecture
-
-### Actor-Critic Networks
-
-#### Actor Network
-
-The actor network maps observations to continuous control actions using a stochastic policy:
-
-$$\pi_\theta(a|s) = \mathcal{N}(\mu_\theta(s), \sigma_\theta^2(s))$$
-
-**Variable meanings:**
-- $s$ — current observation state (e.g., asteroid positions, velocities)
-- $a$ — continuous action sampled from the distribution
-- $\pi_\theta(a|s)$ — probability density of action $a$ given state $s$
-- $\mu_\theta(s)$ — mean action output from network (what action to take on average)
-- $\sigma_\theta(s)$ — standard deviation controlling exploration (higher = more random)
-- $\theta$ — neural network weights/parameters
-- $\mathcal{N}$ — Gaussian/Normal probability distribution
-
-**Network Architecture** with weight matrices $W$ and biases $b$:
-```
-Input layer:           obs ∈ ℝᴰ  (observation dimension)
-Hidden layer 1:        ReLU(W₁·obs + b₁) ∈ ℝᴴ
-Hidden layer 2:        ReLU(W₂·h₁ + b₂) ∈ ℝᴴ
-Hidden layer 3:        ReLU(W₃·h₂ + b₃) ∈ ℝᴴ
-Output mean:           μ(s) = W_μ·h₃ + b_μ ∈ ℝᴬ
-Output log-std:        log σ(s) = W_σ·h₃ + b_σ ∈ ℝᴬ
-```
-
-**Dimension sizes:**
-- D ≈ 50 (observation: asteroid positions, velocities, etc.)
-- H ≈ 256 (hidden: internal representation learned from data)
-- A ≈ 3 (actions: yaw velocity, pitch velocity, fire command)
-
-#### Critic Networks (Dual Q-functions)
-
-Two independent Q-value networks to mitigate overestimation bias:
-
-$$Q_\phi^{(i)}(s, a) \approx \mathbb{E}[R_t | s_t = s, a_t = a] \quad \text{for } i = 1, 2$$
-
-**Variable meanings:**
-- $s$ — current observation state at time $t$
-- $a$ — action taken at time $t$
-- $Q_\phi^{(i)}(s,a)$ — learned Q-value (expected cumulative future reward with discount)
-- $R_t$ — cumulative discounted reward from time $t$ onward
-- $\phi$ — neural network parameters for the critic network
-- $(i)$ — index showing we have two networks (1 and 2) for stability
-- $\mathbb{E}[·|·]$ — conditional expectation over all possible futures
-
-**Network Architecture** combining both state and action:
-```
-Input:                 (obs, action) ∈ ℝᴰ⁺ᴬ
-Concatenation:         concat(obs, a) ∈ ℝᴰ⁺ᴬ
-Hidden layer 1:        ReLU(W₁·concat + b₁) ∈ ℝᴴ
-Hidden layer 2:        ReLU(W₂·h₁ + b₂) ∈ ℝᴴ
-Hidden layer 3:        ReLU(W₃·h₂ + b₃) ∈ ℝᴴ
-Output (Q-value):      Q(s,a) = W_q·h₃ + b_q ∈ ℝ
-```
-
-### Soft Actor-Critic Algorithm
-
-The objective function balances reward maximization with entropy (exploration) maximization:
-
-$$J(\pi) = \mathbb{E}_{s \sim \mathcal{D}}[V(s)] = \mathbb{E}_{s,a \sim \mathcal{D}}[Q(s,a) - \alpha \log \pi(a|s)]$$
-
-**Variable meanings:**
-- $J(\pi)$ — objective (what we want to maximize)
-- $s$ — state sampled from environment experience
-- $a$ — action sampled from policy
-- $\mathcal{D}$ — replay buffer (stored past experiences)
-- $Q(s,a)$ — estimated cumulative reward for this state-action
-- $\alpha$ — temperature coefficient (temperature = entropy weight)
-- $\log \pi(a|s)$ — log probability of action (higher = more likely action)
-- $\mathbb{E}[·]$ — expectation (average over samples)
-
-**Value Function Estimate:** What is this state worth?
-
-$$V(s) = \mathbb{E}_{a \sim \pi}[\min(Q_1(s,a), Q_2(s,a)) - \alpha \log \pi(a|s)]$$
-
-**Variable meanings:**
-- $V(s)$ — value (expected return from this state)
-- $\min(Q_1, Q_2)$ — use smaller Q-value to be conservative (pessimism bias reduction)
-- $a \sim \pi$ — sample action from current policy
-- $-\alpha \log \pi(a|s)$ — entropy bonus (encourage diverse actions)
-
-**Critic Loss** (minimize prediction error with temporal-difference learning):
-
-$$\mathcal{L}_Q = \mathbb{E}_{(s,a,r,s',d) \sim \mathcal{D}} \left[\left(Q(s,a) - y\right)^2\right]$$
-
-Target value:
-$$y = r + \gamma(1-d)\left(\min(Q_1'(s',a'), Q_2'(s',a')) - \alpha \log \pi(a'|s')\right), \quad a' \sim \pi(\cdot|s')$$
-
-**Variable meanings:**
-- $\mathcal{L}_Q$ — critic loss (MSE of Q-prediction error)
-- $(s, a, r, s', d)$ — one stored experience (state, action, reward, next state, done flag)
-- $r$ — immediate reward from environment
-- $s'$ — next state after taking action
-- $d$ — done flag (1 if episode ended, 0 otherwise)
-- $\gamma$ ≈ 0.99 — discount factor (how much to value future rewards)
-- $Q'$ and $\pi'$ — target networks (polyak-averaged copies for stability)
-- $a'$ — best action in next state (sampled from policy)
-
-**Actor Loss** (maximize expected Q-value and entropy):
-
-$$\mathcal{L}_\pi = \mathbb{E}_{s \sim \mathcal{D}, \epsilon \sim \mathcal{N}} \left[\alpha \log \pi(a_s|s) - \min(Q_1(s,a_s), Q_2(s,a_s))\right]$$
-
-where $a_s = \mu(s) + \sigma(s) \odot \epsilon$ is the reparameterized action.
-
-**Variable meanings:**
-- $\mathcal{L}_\pi$ — actor loss (how to improve policy)
-- $\epsilon \sim \mathcal{N}$ — Gaussian noise for gradient estimation
-- $a_s$ — sampled action using reparameterization trick
-- $\mu(s)$ — mean action output
-- $\sigma(s)$ — standard deviation (controls noise)
-- $\odot$ — element-wise multiplication (Hadamard product)
-- Goal: Maximize Q-values while maintaining entropy
-
-**Automatic Entropy Tuning** (learn temperature $\alpha$ automatically):
-
-$$\alpha^* = \arg\min_\alpha \mathbb{E}_{s} [-\alpha(\log \pi(a|s) + H_0)]$$
-
-**Variable meanings:**
-- $\alpha^*$ — optimal temperature parameter
-- $H_0 = -|A|$ — target entropy (negative of action dimension)
-- Objective: Keep entropy at desired level automatically
-
-### Environment
-
-The AsteroidDefenseEnv simulates:
-- Incoming asteroids with configurable spawn patterns
-- Cannon defensive mechanism with limited field of view
-- Reward signal based on asteroids destroyed and hull integrity
-
-## Training & Results
-
-### Two-Stage Training
-
-The project trains two agents independently:
-
-**1. Selector Agent** (`train_selector.py`)
-- **Action Space**: Discrete (which asteroid slot to target: 0-4)
-- **Training Algorithm**: SAC with discrete actions (`core/sac_discrete.py`)
-- **Network**: `core/models_discrete.py` (Actor outputs Q-values, Critic evaluates)
-- **Output**: Saved to `results/weights_selector/`
-  - `actor.pt` — Target selection policy
-  - `critic1.pt`, `critic2.pt` — Q-value estimators
-- **Plots**: Training curves saved to `results/plots_selector/`
-
-**2. Aimer Agent** (`train_aimer.py`)
-- **Action Space**: Continuous (cannon yaw velocity, pitch velocity, fire command)
-- **Training Algorithm**: SAC with continuous actions (`core/sac_continuous.py`)
-- **Network**: `core/models_continuous.py` (Gaussian policy network)
-- **Output**: Saved to `results/weights_aimer/`
-  - `actor.pt` — Aiming policy (frozen during selector training)
-  - `critic1.pt`, `critic2.pt` — Q-value estimators
-- **Plots**: Training curves saved to `results/plots_aimer/`
-
-### Model Checkpoints
-
-Models are saved in `results/weights_*/`:
-
-```
-results/
-├── weights_selector/
-│   ├── actor.pt           # Selector policy (discrete)
-│   ├── critic1.pt         # Q-function 1
-│   └── critic2.pt         # Q-function 2
-├── weights_aimer/
-│   ├── actor.pt           # Aimer policy (continuous, frozen)
-│   ├── critic1.pt         # Q-function 1
-│   └── critic2.pt         # Q-function 2
-├── plots_selector/
-│   ├── reward.png         # Reward learning curves
-│   ├── hull_damage.png    # Hull integrity over training
-│   └── kills.png          # Asteroids destroyed per episode
-├── plots_aimer/
-│   ├── reward.png
-│   ├── hull_damage.png
-│   └── kills.png
-└── metrics/               # Training logs
-    ├── selector_metrics.log
-    └── aimer_metrics.log
-```
-
-## Performance Metrics
-
-The agent is evaluated on multiple dimensions:
-
-### Task Performance
-- **Episode Reward**: Cumulative discounted reward per episode ($\sum_t \gamma^t r_t$)
-- **Asteroids Destroyed**: Total count of successfully destroyed asteroids per episode
-- **Hull Integrity**: Final remaining health of defense system (0-100%)
-- **Survival Time**: Episode length in seconds before shield failure
-
-### Learning Efficiency  
-- **Sample Efficiency**: Reward per environment interaction (steps taken)
-- **Training Time**: Wall-clock time to convergence
-- **Convergence Speed**: Episodes required to reach target performance
-
-### Robustness
-- **Generalization**: Performance on held-out test seeds
-- **Variance**: Standard deviation of reward across evaluation runs
-- **Performance on Baselines**: Comparison vs. heuristic and learned baselines
-
-## Development
-
-### Adding New Features
-
-1. **Modify environment**: Edit `core/env.py` to add new mechanics or observations
-2. **Update networks**: Edit `core/models_discrete.py` or `core/models_continuous.py` for new architectures
-3. **Extend SAC**: Modify `core/sac_discrete.py` or `core/sac_continuous.py` for algorithm changes
-4. **Update configurations**: Edit `configs/config_select.yaml` or `configs/config_aim.yaml`
-
-### Project Organization
-
-- **Core algorithms**: `core/` — SAC implementations, environment, networks
-- **Visualization**: `visuals/` — PyGame and Ursina renderers, GIF recording
-- **Training scripts**: `train_selector.py`, `train_aimer.py` — entry points
-- **Evaluation scripts**: `run_agent.py`, `run_baseline.py`, `run_manual.py` — testing
-- **Configurations**: `configs/` — YAML-based hyperparameter control
-
-### Testing Changes
-
-```bash
-# Train selector agent with modified config
-python train_selector.py --config configs/config_select.yaml
-
-# Visualize results
-python run_agent.py --config configs/config_eval.yaml --renderer pygame
-
-# Compare against baseline
-python run_baseline.py --config configs/config_eval.yaml
-```
-
-## Troubleshooting
-
-### Import Errors
-If you encounter import errors, ensure all dependencies are installed:
-```bash
-python -m pip install -U pip setuptools wheel
-python -m pip install -e .
-```
-
-### CUDA/GPU Support
-For GPU acceleration with PyTorch, install a CUDA-enabled version:
-```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-```
+<a id="references"></a>
 
 ## References
 
-- **SAC Algorithm**: [Soft Actor-Critic: Off-Policy Deep Reinforcement Learning with a Stochastic Actor](https://arxiv.org/abs/1801.01290)
-- **Gymnasium**: [OpenAI Gymnasium Documentation](https://gymnasium.farama.org/)
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Contact
-
-For questions or issues, please create an issue in the repository.
+- [Gymnasium documentation](https://gymnasium.farama.org/)
+- [Soft Actor-Critic paper](https://arxiv.org/abs/1801.01290)
+- [PyTorch documentation](https://pytorch.org/docs/stable/index.html)
