@@ -254,7 +254,7 @@ The baseline controller is implemented in [core/baseline.py](core/baseline.py). 
 ### Checked-in baseline rollout
 
 <p align="center">
-  <img src="important_gif/new_baseline.gif" alt="Asteroid Defense new baseline rollout" width="62%" />
+  <img src="important_gif/new_baseline_3d_20fps.gif" alt="Asteroid Defense new baseline rollout" width="62%" />
 </p>
 
 <a id="aimer"></a>
@@ -416,7 +416,7 @@ This repository already includes weights, plots, and evaluation summaries.
 | Artifact type | Path |
 | --- | --- |
 | Learned-agent GIF | `important_gif/agent.gif` |
-| Baseline GIFs | `important_gif/new_baseline.gif`, `important_gif/run_baseline.gif`, `important_gif/run_baseline_30fps.gif` |
+| Baseline GIFs | `important_gif/new_baseline_3d_20fps.gif`, `important_gif/run_baseline.gif`, `important_gif/run_baseline_30fps.gif` |
 | Aimer weights | `results/weights_aim/actor.pt`, `critic1.pt`, `critic2.pt` |
 | Selector weights | `results/weights_selector/actor.pt`, `critic1.pt`, `critic2.pt` |
 | Aimer plots | `results/plots_aim/reward.png`, `kills.png`, `hull_damage.png` |
@@ -433,7 +433,7 @@ This repository already includes weights, plots, and evaluation summaries.
       <p><strong>Learned-agent rollout.</strong> A checked-in rendered 3D episode of the hybrid selector-plus-aimer controller.</p>
     </td>
     <td width="50%" valign="top">
-      <img src="important_gif/new_baseline.gif" alt="New baseline rollout preview" width="100%" />
+      <img src="important_gif/new_baseline_3d_20fps.gif" alt="New baseline rollout preview" width="100%" />
       <p><strong>New baseline rollout.</strong> A checked-in rendered baseline episode that should be compared visually against the learned agent.</p>
     </td>
   </tr>
