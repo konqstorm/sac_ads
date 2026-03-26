@@ -635,7 +635,7 @@ $$t=\min\{t>0:\; a t^2 + b t + c=0\}$$
 
 - Projectile aim point and angles:
 $$\mathbf p=\mathbf r + \mathbf v\,t,\quad \hat d=\frac{\mathbf p}{\|\mathbf p\|}$$
-$$\text{pitch}=\arcsin(\hat d_z),\quad \text{yaw}=\operatorname{atan2}(\hat d_x,\hat d_y)$$
+$$\text{pitch}=\arcsin(\hat d_z),\quad \text{yaw}=\atan2(\hat d_x,\hat d_y)$$
 
 - Continuous SAC (aimer) — core losses:
 $$y_t = r_t + \gamma(1-\mathbf 1_{done})\Big(\min\{Q_{\bar\theta_1}(s',a'),Q_{\bar\theta_2}(s',a')\}-\alpha\log\pi(a'|s')\Big)$$
