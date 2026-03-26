@@ -577,6 +577,82 @@ python -c "from evaluate import run_eval; run_eval(mode='agent', episodes=100)"
 python -c "from evaluate import run_eval; run_eval(mode='aimer', episodes=100)"
 ```
 
+### Reproducibility & Technical details
+
+- **Quick reproduce (minimal):**
+  - Train aimer: `python train_aimer.py` (uses `configs/config_aim.yaml`).
+  - Train selector: `python train_selector.py` (uses `configs/config_select.yaml`).
+  - Evaluate learned two-stage agent: `python -c "from evaluate import run_eval; run_eval(mode='agent', episodes=100)"` (uses `configs/config_eval.yaml`).
+  - Recommended Python: 3.10–3.11; install deps with `python -m pip install -r requirements.txt`.
+
+- **Key config fields (where to change):** see `configs/*.yaml`.
+  - `env.max_steps`, `env.dt` — episode length and physics timestep.
+  - `env.fire_threshold` — action[2] threshold to spawn a projectile (see `configs/*` values: `0.0`/`0.5`).
+  - `env.reward_hit`, `env.reward_impact`, `env.reward_shot`, `env.reward_no_shot`, `env.reward_win`, `env.reward_lose` — scalar reward coefficients (set in each config file).
+  - `agent.commit_steps`, `agent.target_switch_penalty`, `agent.ghost_target_penalty` — selector commitment / penalties (in `config_select.yaml`).
+
+- **Observations / Actions:**
+  - Full observation: 29 dims = 5 slots × 5 features (25) + `hp_norm` + `remaining_norm` + `yaw_norm` + `pitch_norm` = 29 (see `core/env.py` `_get_obs`).
+  - Slot features order: `[err_yaw_n, err_pitch_n, time_norm, dist_norm, t_impact_norm]` (all clipped to [0,1] or [-1,1] as implemented).
+  - Aimer observation: 7 dims = selected slot (5) + `yaw_norm` + `pitch_norm` (see `core/aim_utils.py`).
+  - Action space: 3D continuous in `[-1,1]` — `[u_yaw, u_pitch, u_fire]` (mapped in env: yaw/pitch change = `action[i] * max_ang_vel * dt`; fire when `action[2] > fire_threshold`).
+
+- **Reward breakdown (numeric from configs):**
+  - Values: `reward_hit = 10`, `reward_impact = -10`, `reward_shot = 0`, `reward_no_shot = 0`, `reward_win = 30`, `reward_lose = -30` (see `configs/config_select.yaml` and `configs/config_eval.yaml`; `config_aim.yaml` uses `reward_hit=10/reward_impact=-10`).
+  - Effect: `reward_hit` incentivizes kills; `reward_impact` penalizes misses/impacts; `reward_win`/`reward_lose` give episode-level shaping.
+
+- **Exact evaluation protocol used by `evaluate.run_eval`:**
+  - Per-episode seed = `train.seed + episode_index` (default `train.seed=42` in configs).
+  - `win` is defined as `env.hp > 0 and env.asteroids_remaining == 0 and len(env.asteroids) == 0` (see `evaluate.py`).
+  - Reported metrics: printed `kills_total`, `hull_damage_total`, `winrate = wins/episodes` (run_eval prints to stdout; redirect output to file to save results).
+
+- **Hyperparameters (summary):**
+  - Aimer (`configs/config_aim.yaml`): `gamma=0.99`, `tau=0.005`, `alpha=0.2`, `lr_actor=3e-4`, `lr_critic=3e-4`, `batch_size=512`, `buffer=200000`, `start_steps=1000`, `updates_every=4`, `updates_per_step=2`, `episodes=75`.
+  - Selector (`configs/config_select.yaml`): `gamma=0.99`, `tau=0.005`, `alpha=0.2`, `lr_actor=1e-4`, `lr_critic=3e-4`, `batch_size=128`, `buffer=200000`, `start_steps=3000`, `update_every=4`, `updates_per_step=2`, `policy_delay=2`, `episodes=74`, `commit_steps=15`.
+
+- **Quick demo (one-command GIF):**
+  - Edit `configs/config_eval.yaml` set `run.mode: agent`, `run.do_gif: true`, `run.gif_directory: important_gif`, `run.gif_name: agent_run.gif`, then run:
+    ```bash
+    python run_agent.py
+    ```
+  - Resulting GIF: `important_gif/agent_run.gif` (or the paths you set in the config).
+
+### Baseline controller (brief)
+
+- Behavior: selects nearest unfired asteroid, solves projectile intercept, aims and fires when angular error is small.
+- Key steps (see `core/baseline.py`):
+  1. select nearest candidate not in `fired_ids`;
+  2. solve intercept time t via quadratic (see formulas below) and compute aim point `p = r + v t`;
+  3. convert `p` to target yaw/pitch and compute errors `err_yaw`, `err_pitch`;
+  4. proportional angular command: `action_{yaw} = clip(err_yaw / (max_ang_vel * dt), -1, 1)` (same for pitch);
+  5. fire (`action[2]=1`) when `|err_yaw|<0.02 and |err_pitch|<0.02` and target not yet fired.
+
+### Training formulas (essential)
+
+- Intercept quadratic (used by baseline and obs features):
+$$a=\mathbf v\cdot\mathbf v - s^2,\quad b=2\,\mathbf r\cdot\mathbf v,\quad c=\mathbf r\cdot\mathbf r$$
+$$t=\min\{t>0:\; a t^2 + b t + c=0\}$$
+
+- Projectile aim point and angles:
+$$\mathbf p=\mathbf r + \mathbf v\,t,\quad \hat d=\frac{\mathbf p}{\|\mathbf p\|}$$
+$$\text{pitch}=\arcsin(\hat d_z),\quad \text{yaw}=\operatorname{atan2}(\hat d_x,\hat d_y)$$
+
+- Continuous SAC (aimer) — core losses:
+$$y_t = r_t + \gamma(1-\mathbf 1_{done})\Big(\min\{Q_{\bar\theta_1}(s',a'),Q_{\bar\theta_2}(s',a')\}-\alpha\log\pi(a'|s')\Big)$$
+$$\mathcal L_Q(\theta)=\mathbb E\big[(Q_\theta(s,a)-y_t)^2\big]$$
+$$\mathcal L_\pi(\phi)=\mathbb E_{s}\mathbb E_{a\sim\pi_\phi}\big[\alpha\log\pi_\phi(a|s)-Q_\theta(s,a)\big]$$
+$$\bar\theta\leftarrow\tau\theta+(1-\tau)\bar\theta$$
+
+- Discrete SAC (selector) — soft backup and objectives:
+$$V_{\bar\theta}(s')=\sum_a\pi(a|s')\big(Q_{\bar\theta}(s',a)-\alpha\log\pi(a|s')\big)$$
+$$y_t = r_t + \gamma(1-\mathbf 1_{done})V_{\bar\theta}(s')$$
+$$\mathcal L_Q(\theta)=\mathbb E\big[(Q_\theta(s,a)-y_t)^2\big]$$
+$$\mathcal L_\pi(\phi)=\mathbb E_s\Big[\sum_a\pi_\phi(a|s)(\alpha\log\pi_\phi(a|s)-Q_\theta(s,a))\Big]$$
+
+- Reward shaping (selector adds penalties from config):
+$$r_t = r_{hit}\mathbf 1_{hit} + r_{impact}\mathbf 1_{impact} + r_{shot}\mathbf 1_{shot} + r_{no\_shot}\mathbf 1_{no\_shot} + r_{shaping}$$
+where `r_shaping` may include `target_switch_penalty` and `ghost_target_penalty` (see `config_select.yaml`).
+
 ### Visual configuration
 
 Visual scripts read `configs/config_eval.yaml`.
