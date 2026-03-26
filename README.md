@@ -579,7 +579,7 @@ python -c "from evaluate import run_eval; run_eval(mode='aimer', episodes=100)"
 
 ### Reproducibility & Technical details
 
-- **Quick reproduce (minimal):**
+- **Quick reproduce:**
   - Train aimer: `python train_aimer.py` (uses `configs/config_aim.yaml`).
   - Train selector: `python train_selector.py` (uses `configs/config_select.yaml`).
   - Evaluate learned two-stage agent: `python -c "from evaluate import run_eval; run_eval(mode='agent', episodes=100)"` (uses `configs/config_eval.yaml`).
@@ -606,7 +606,7 @@ python -c "from evaluate import run_eval; run_eval(mode='aimer', episodes=100)"
   - `win` is defined as `env.hp > 0 and env.asteroids_remaining == 0 and len(env.asteroids) == 0` (see `evaluate.py`).
   - Reported metrics: printed `kills_total`, `hull_damage_total`, `winrate = wins/episodes` (run_eval prints to stdout; redirect output to file to save results).
 
-- **Hyperparameters (summary):**
+- **Hyperparameters:**
   - Aimer (`configs/config_aim.yaml`): `gamma=0.99`, `tau=0.005`, `alpha=0.2`, `lr_actor=3e-4`, `lr_critic=3e-4`, `batch_size=512`, `buffer=200000`, `start_steps=1000`, `updates_every=4`, `updates_per_step=2`, `episodes=75`.
   - Selector (`configs/config_select.yaml`): `gamma=0.99`, `tau=0.005`, `alpha=0.2`, `lr_actor=1e-4`, `lr_critic=3e-4`, `batch_size=128`, `buffer=200000`, `start_steps=3000`, `update_every=4`, `updates_per_step=2`, `policy_delay=2`, `episodes=74`, `commit_steps=15`.
 
@@ -617,7 +617,7 @@ python -c "from evaluate import run_eval; run_eval(mode='aimer', episodes=100)"
     ```
   - Resulting GIF: `important_gif/agent_run.gif` (or the paths you set in the config).
 
-### Baseline controller (brief)
+### Baseline controller
 
 - Behavior: selects nearest unfired asteroid, solves projectile intercept, aims and fires when angular error is small.
 - Key steps (see `core/baseline.py`):
@@ -627,7 +627,7 @@ python -c "from evaluate import run_eval; run_eval(mode='aimer', episodes=100)"
   4. proportional angular command: `action_{yaw} = clip(err_yaw / (max_ang_vel * dt), -1, 1)` (same for pitch);
   5. fire (`action[2]=1`) when `|err_yaw|<0.02 and |err_pitch|<0.02` and target not yet fired.
 
-### Training formulas (essential)
+### Training formulas
 
 - Intercept quadratic (used by baseline and obs features):
 $$a=\mathbf v\cdot\mathbf v - s^2,\quad b=2\,\mathbf r\cdot\mathbf v,\quad c=\mathbf r\cdot\mathbf r$$
